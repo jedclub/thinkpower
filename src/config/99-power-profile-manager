@@ -1,0 +1,2 @@
+# ThinkPower Passwordless Hardware Tuning
+ALL ALL=(ALL) NOPASSWD: /usr/local/bin/power-profile-manager, /home/*/.local/bin/power-profile-manager

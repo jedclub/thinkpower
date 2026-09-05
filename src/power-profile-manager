@@ -1,0 +1,267 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# ThinkPad L15 (AMD Renoir 4750U) 4-Stage Power Profile Manager
+# ==============================================================================
+# 1. performance : 풀클럭 (4.1GHz 부스트 ON, 최대 성능)
+# 2. balanced    : 기본 균형 (동적 부스트, 패널절전 1단계)
+# 3. save        : 스마트 절전 (아무것도 안 끔, 와이파이/BT/16스레드 100% 유지, 1.7GHz 상한, 패널절전 2)
+# 4. ultra       : 극한 초절전 (와이파이/BT 100% 유지, 1.4GHz, 48Hz, ASPM MAX, I/O 지연, 키보드LED 소등)
+# ==============================================================================
+
+# status 외의 명령 실행 시 루트 권한 필요
+if [ "$1" != "status" ] && [ "$EUID" -ne 0 ]; then
+    if sudo -n true 2>/dev/null; then
+        exec sudo "$0" "$@"
+    elif command -v pkexec >/dev/null 2>&1; then
+        exec pkexec "$0" "$@"
+    else
+        exec sudo "$0" "$@"
+    fi
+fi
+
+# 일반 사용자 환경 변수 (kscreen-doctor, notify-send 등 데스크톱 연동용)
+REAL_USER="${SUDO_USER:-$USER}"
+USER_ID=$(id -u "$REAL_USER" 2>/dev/null || echo 1000)
+USER_HOME=$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6)
+USER_HOME="${USER_HOME:-$HOME}"
+
+export WAYLAND_DISPLAY="wayland-0"
+export XDG_RUNTIME_DIR="/run/user/$USER_ID"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$USER_ID/bus"
+
+run_as_user() {
+    sudo -u "$REAL_USER" \
+        XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+        WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
+        DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" \
+        "$@" 2>/dev/null || true
+}
+
+CACHE_DIR="${USER_HOME}/.cache"
+mkdir -p "$CACHE_DIR" 2>/dev/null || true
+STATE_FILE="${CACHE_DIR}/power_profile_mode"
+KBD_BACKUP="${CACHE_DIR}/prev_kbd_backlight"
+
+if [ ! -f "$STATE_FILE" ]; then
+    echo "balanced" > "$STATE_FILE"
+    chown "$REAL_USER:" "$STATE_FILE" 2>/dev/null || true
+fi
+
+restore_common_hardware() {
+    # VM 및 디스크 플러시 주기 원복
+    echo 0 > /proc/sys/vm/laptop_mode 2>/dev/null || true
+    echo 500 > /proc/sys/vm/dirty_writeback_centisecs 2>/dev/null || true
+    # PCIe ASPM 정책 원복
+    echo default > /sys/module/pcie_aspm/parameters/policy 2>/dev/null || true
+    # 오디오 슬립 원복 (10초)
+    echo 10 > /sys/module/snd_hda_intel/parameters/power_save 2>/dev/null || true
+    # SMT 가상스레드 활성화 (16스레드)
+    echo on > /sys/devices/system/cpu/smt/control 2>/dev/null || true
+    # ryzenadj 전력 상한 복원 (설치되어 있을 경우)
+    command -v ryzenadj >/dev/null 2>&1 && ryzenadj --stapm-limit=25000 --fast-limit=30000 --slow-limit=25000 >/dev/null 2>&1 || true
+    # 화면 60Hz 복원
+    run_as_user kscreen-doctor output.1.mode.1
+    # 파일 인덱서 재개
+    run_as_user balooctl6 resume
+    # 키보드 백라이트 이전 상태 자동 복원
+    if [ -f "$KBD_BACKUP" ]; then
+        PREV_KBD=$(cat "$KBD_BACKUP" 2>/dev/null || echo "1")
+        if [ "$PREV_KBD" -gt 0 ] && [ -w /sys/class/leds/tpacpi::kbd_backlight/brightness ]; then
+            echo "$PREV_KBD" > /sys/class/leds/tpacpi::kbd_backlight/brightness
+        fi
+        rm -f "$KBD_BACKUP"
+    fi
+}
+
+set_performance() {
+    echo "▶ [성능 모드] 적용 중..."
+    restore_common_hardware
+
+    # 1. CPU
+    [ -w /sys/devices/system/cpu/cpufreq/boost ] && echo 1 > /sys/devices/system/cpu/cpufreq/boost
+    for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+        [ -w "$g" ] && echo schedutil > "$g"
+    done
+    # 2. ThinkPad EC & ACPI
+    [ -w /sys/firmware/acpi/platform_profile ] && echo performance > /sys/firmware/acpi/platform_profile
+    # 3. GPU & Panel
+    [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 0 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
+    [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo auto > /sys/class/drm/card1/device/power_dpm_force_performance_level
+    # 4. PPD
+    powerprofilesctl set performance >/dev/null 2>&1 || true
+
+    echo "performance" > "$STATE_FILE"
+    run_as_user notify-send -i battery-profile-performance-symbolic -t 3000 "전원 프로파일: [성능]" "CPU 부스트(4.1GHz) 활성화, 최대 성능"
+}
+
+set_balanced() {
+    echo "▶ [균형 모드] 적용 중..."
+    restore_common_hardware
+
+    # 1. CPU
+    [ -w /sys/devices/system/cpu/cpufreq/boost ] && echo 1 > /sys/devices/system/cpu/cpufreq/boost
+    for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+        [ -w "$g" ] && echo schedutil > "$g"
+    done
+    # 2. ThinkPad EC & ACPI
+    [ -w /sys/firmware/acpi/platform_profile ] && echo balanced > /sys/firmware/acpi/platform_profile
+    # 3. GPU & Panel
+    [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 1 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
+    [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo auto > /sys/class/drm/card1/device/power_dpm_force_performance_level
+    # 4. PCIe Runtime PM
+    command -v powertop >/dev/null 2>&1 && powertop --auto-tune >/dev/null 2>&1 || true
+    # 5. PPD
+    powerprofilesctl set balanced >/dev/null 2>&1 || true
+
+    echo "balanced" > "$STATE_FILE"
+    run_as_user notify-send -i battery-profile-balanced-symbolic -t 3000 "전원 프로파일: [균형]" "표준 동적 클럭 및 전력 관리"
+}
+
+set_save() {
+    echo "▶ [스마트 절전 모드] 적용 중 (와이파이/BT/장치 100% 정상 작동)..."
+    restore_common_hardware
+
+    # 1. CPU: 1.7GHz 상한 (부스트만 OFF, 8코어 16스레드 유지, schedutil 반응성 유지)
+    [ -w /sys/devices/system/cpu/cpufreq/boost ] && echo 0 > /sys/devices/system/cpu/cpufreq/boost
+    for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+        [ -w "$g" ] && echo schedutil > "$g"
+    done
+    # 2. ThinkPad EC: 저소음/저발열 프로파일
+    [ -w /sys/firmware/acpi/platform_profile ] && echo low-power > /sys/firmware/acpi/platform_profile
+    # 3. GPU & Panel: 적응형 백라이트 절전 2단계 (색 왜곡 없이 백라이트 절감)
+    [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 2 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
+    [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo low > /sys/class/drm/card1/device/power_dpm_force_performance_level
+    # 4. PCIe Runtime PM
+    command -v powertop >/dev/null 2>&1 && powertop --auto-tune >/dev/null 2>&1 || true
+    # 5. PPD
+    powerprofilesctl set power-saver >/dev/null 2>&1 || true
+
+    echo "save" > "$STATE_FILE"
+    run_as_user notify-send -i battery-profile-powersave-symbolic -t 3000 "전원 프로파일: [스마트 절전]" "부스트 OFF(1.7GHz 상한) 및 발열 억제\n(Wi-Fi, 블루투스, 16스레드 100% 유지)"
+}
+
+set_ultra() {
+    echo "▶ [극한 초절전 모드] 적용 중 (와이파이/BT 100% 유지, 물리적 전력 극한 다이어트)..."
+
+    # [1. CPU & APU 극단 제한]
+    # - 터보 부스트 즉시 차단
+    [ -w /sys/devices/system/cpu/cpufreq/boost ] && echo 0 > /sys/devices/system/cpu/cpufreq/boost
+    # - powersave 거버너: 1.4GHz 최저 전압/클럭 바닥으로 고정
+    for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+        [ -w "$g" ] && echo powersave > "$g"
+    done
+    # - SMT 가상스레드 OFF: 16스레드 -> 8물리코어로 코어 스위칭 오버헤드 및 누설전류 차단
+    [ -w /sys/devices/system/cpu/smt/control ] && echo off > /sys/devices/system/cpu/smt/control
+    # - ryzenadj: 6W 하드웨어 파워캡 (설치 시 즉시 발동)
+    command -v ryzenadj >/dev/null 2>&1 && ryzenadj --stapm-limit=6000 --fast-limit=8000 --slow-limit=6000 --tctl-temp=65 >/dev/null 2>&1 || true
+
+    # [2. 디스플레이 & GPU 극한 절감]
+    # - 주사율 60Hz -> 48Hz 다운클럭 (화면 스캔아웃 엔진 전력 절감)
+    run_as_user kscreen-doctor output.1.mode.2
+    # - 패널 백라이트 적응형 절전 레벨 4 (최대 절감)
+    [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 4 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
+    # - GPU DPM 최저 고정
+    [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo low > /sys/class/drm/card1/device/power_dpm_force_performance_level
+
+    # [3. PCIe 버스 & NVMe SSD 딥슬립]
+    # - PCIe ASPM 초절전 정책 강제 (L1.1 / L1.2 링크 슬립 강제)
+    [ -w /sys/module/pcie_aspm/parameters/policy ] && echo powersupersave > /sys/module/pcie_aspm/parameters/policy
+    # - 리눅스 커널 랩톱 모드 5 (디스크 쓰기 버퍼링을 묶어 SSD가 수분간 깨어나지 않게 유지)
+    echo 5 > /proc/sys/vm/laptop_mode 2>/dev/null || true
+    echo 6000 > /proc/sys/vm/dirty_writeback_centisecs 2>/dev/null || true
+    # - 모든 PCIe 디바이스 슬립 활성화
+    command -v powertop >/dev/null 2>&1 && powertop --auto-tune >/dev/null 2>&1 || true
+
+    # [4. 오디오 & 씽크패드 EC & 외장 누수 차단]
+    # - 무음 시 1초만에 오디오 코덱 전원 차단
+    [ -w /sys/module/snd_hda_intel/parameters/power_save ] && echo 1 > /sys/module/snd_hda_intel/parameters/power_save
+    # - ThinkPad 저전력 플랫폼 프로파일 (팬 최저 또는 정지)
+    [ -w /sys/firmware/acpi/platform_profile ] && echo low-power > /sys/firmware/acpi/platform_profile
+    # - 키보드 백라이트 이전 상태 백업 후 소등
+    if [ -r /sys/class/leds/tpacpi::kbd_backlight/brightness ]; then
+        CUR_KBD=$(cat /sys/class/leds/tpacpi::kbd_backlight/brightness 2>/dev/null || echo "0")
+        if [ "$CUR_KBD" -gt 0 ]; then
+            echo "$CUR_KBD" > "$KBD_BACKUP"
+            chmod 666 "$KBD_BACKUP" 2>/dev/null || true
+        fi
+    fi
+    [ -w /sys/class/leds/tpacpi::kbd_backlight/brightness ] && echo 0 > /sys/class/leds/tpacpi::kbd_backlight/brightness
+    # - Baloo 파일 색인 중단 (CPU/SSD 불필요한 웨이크업 원천 방지)
+    run_as_user balooctl6 suspend
+
+    # [5. PPD 동기화]
+    powerprofilesctl set power-saver >/dev/null 2>&1 || true
+
+    echo "ultra" > "$STATE_FILE"
+    run_as_user notify-send -u critical -i battery-low -t 5000 \
+        "전원 프로파일: [⚡ 극한 초절전 ON]" \
+        "1.4GHz 고정 | 48Hz | ASPM MAX | 8C전용 | 백라이트MAX\n(※ Wi-Fi 및 블루투스는 정상 유지됩니다)"
+}
+
+toggle_ultra() {
+    CURRENT=$(cat "$STATE_FILE" 2>/dev/null || echo "balanced")
+    if [ "$CURRENT" = "ultra" ]; then
+        set_save
+    else
+        set_ultra
+    fi
+}
+
+show_status() {
+    CURRENT=$(cat "$STATE_FILE" 2>/dev/null || echo "unknown")
+    BOOST=$(cat /sys/devices/system/cpu/cpufreq/boost 2>/dev/null || echo "?")
+    GOV=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "?")
+    SMT=$(cat /sys/devices/system/cpu/smt/control 2>/dev/null || echo "?")
+    ABM=$(cat /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || echo "?")
+    ASPM=$(cat /sys/module/pcie_aspm/parameters/policy 2>/dev/null | grep -o '\[.*\]' | tr -d '[]' || echo "?")
+    VM_LM=$(cat /proc/sys/vm/laptop_mode 2>/dev/null || echo "?")
+    KBD=$(cat /sys/class/leds/tpacpi::kbd_backlight/brightness 2>/dev/null || echo "?")
+    POWER=$(cat /sys/class/power_supply/BAT0/power_now 2>/dev/null || echo "0")
+    POWER_W=$(awk "BEGIN {printf \"%.2f\", $POWER / 1000000}" 2>/dev/null || echo "$POWER uW")
+
+    echo "=========================================="
+    echo "  현재 전원 모드 : $CURRENT"
+    echo "=========================================="
+    echo "  - CPU Boost       : $BOOST (1=ON, 0=OFF)"
+    echo "  - CPU Governor    : $GOV"
+    echo "  - SMT (스레드)    : $SMT (on=16스레드, off=8스레드)"
+    echo "  - 패널 절전(ABM)  : 레벨 $ABM (0=끄기, 4=최대)"
+    echo "  - PCIe ASPM 정책  : $ASPM"
+    echo "  - 커널 랩톱 모드  : $VM_LM (5=디스크I/O 극한 버퍼링)"
+    echo "  - 키보드 백라이트 : $KBD (0=소등)"
+    echo "  - Wi-Fi / BT      : 항상 정상 가동 (연결 유지)"
+    BAT_STATUS=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null || echo "Unknown")
+    if [ "$BAT_STATUS" = "Charging" ]; then
+        echo "  - 현재 충전량 (+): +${POWER_W}W (어댑터 충전 중)"
+    elif [ "$BAT_STATUS" = "Full" ]; then
+        echo "  - 현재 전원 상태: 완충됨 (외부 AC 어댑터 직결)"
+    else
+        echo "  - 현재 사용량 (-): -${POWER_W}W (배터리 사용 중)"
+    fi
+    echo "=========================================="
+}
+
+case "$1" in
+    performance|perf)
+        set_performance
+        ;;
+    balanced|bal)
+        set_balanced
+        ;;
+    save|powersave)
+        set_save
+        ;;
+    ultra)
+        set_ultra
+        ;;
+    toggle|toggle-ultra)
+        toggle_ultra
+        ;;
+    status)
+        show_status
+        ;;
+    *)
+        echo "사용법: $(basename "$0") {performance|balanced|save|ultra|toggle|status}"
+        exit 1
+        ;;
+esac
