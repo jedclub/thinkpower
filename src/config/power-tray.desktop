@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=ThinkPower Tray
 Comment=Advanced Battery & Power Management Tray for KDE Plasma
-Exec=sh -c 'exec "${HOME}/.local/bin/power-tray.py"'
+Exec=sh -c 'exec "${HOME}/.local/bin/power-tray"'
 Icon=battery-profile-balanced-symbolic
 Terminal=false
 Type=Application

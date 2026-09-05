@@ -1,0 +1,752 @@
+#include <gtk/gtk.h>
+#include <libayatana-appindicator/app-indicator.h>
+#include <gio/gio.h>
+#include <glib.h>
+
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
+#include <map>
+#include <cmath>
+#include <iomanip>
+#include <cstdlib>
+#include <unistd.h>
+#include <pwd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+
+static const char *APPINDICATOR_ID = "power_profile_indicator";
+
+struct PeripheralInfo {
+    std::string name;
+    std::string icon;
+    int pct = 0;
+};
+
+struct BatteryInfo {
+    int capacity = 0;
+    std::string status = "Unknown";
+    double power_w = 0.0;
+    std::string time_str;
+    int cycle_count = 0;
+    double health_pct = 100.0;
+    int charge_limit = 100;
+    std::string protect_str = "100% (일반)";
+    std::vector<PeripheralInfo> peripherals;
+};
+
+class PowerTrayApp {
+public:
+    PowerTrayApp();
+    ~PowerTrayApp();
+
+    void run();
+    void update_state_ui();
+    void switch_mode(const std::string &mode_key, const std::string &trigger_source = "user");
+    void on_radio_toggled(GtkCheckMenuItem *item, const std::string &mode_key);
+    void show_detailed_status();
+
+    // D-Bus Signal Callback
+    void on_dbus_signal(const std::string &new_os_profile);
+
+private:
+    std::string get_cache_dir();
+    std::string get_state_file_path();
+    std::string get_manager_bin();
+    std::string get_current_mode();
+    void set_current_mode(const std::string &mode);
+
+    BatteryInfo get_battery_info();
+    std::vector<PeripheralInfo> get_peripheral_batteries();
+    void update_icon_label_and_tooltip(const std::string &mode, const BatteryInfo &bat);
+    void build_menu();
+    void notify_user(const std::string &title, const std::string &msg, const std::string &icon = "battery-profile-powersave-symbolic");
+    void setup_dbus_listener();
+
+    static gboolean timer_callback(gpointer user_data);
+    static void radio_callback(GtkCheckMenuItem *item, gpointer user_data);
+    static void detail_callback(GtkMenuItem *item, gpointer user_data);
+
+    AppIndicator *indicator = nullptr;
+    GtkWidget *menu = nullptr;
+    GtkWidget *header_battery = nullptr;
+    GtkWidget *header_power = nullptr;
+    GtkWidget *header_protect = nullptr;
+    GtkWidget *header_bt = nullptr;
+
+    GSList *radio_group = nullptr;
+    std::map<std::string, GtkWidget*> radio_items;
+
+    bool updating_ui = false;
+    GDBusConnection *dbus_conn = nullptr;
+    guint dbus_sub_id = 0;
+};
+
+struct RadioCallbackData {
+    PowerTrayApp *app;
+    std::string mode_key;
+};
+
+// ==============================================================================
+// Implementation
+// ==============================================================================
+
+PowerTrayApp::PowerTrayApp() {
+    indicator = app_indicator_new(
+        APPINDICATOR_ID,
+        "battery-profile-balanced-symbolic",
+        APP_INDICATOR_CATEGORY_HARDWARE
+    );
+    app_indicator_set_status(indicator, APP_INDICATOR_STATUS_ACTIVE);
+
+    menu = gtk_menu_new();
+    build_menu();
+    app_indicator_set_menu(indicator, GTK_MENU(menu));
+
+    setup_dbus_listener();
+    update_state_ui();
+
+    g_timeout_add_seconds(2, timer_callback, this);
+}
+
+PowerTrayApp::~PowerTrayApp() {
+    if (dbus_conn && dbus_sub_id > 0) {
+        g_dbus_connection_signal_unsubscribe(dbus_conn, dbus_sub_id);
+    }
+    if (dbus_conn) {
+        g_object_unref(dbus_conn);
+    }
+}
+
+void PowerTrayApp::run() {
+    gtk_main();
+}
+
+std::string PowerTrayApp::get_cache_dir() {
+    const char *xdg = getenv("XDG_CACHE_HOME");
+    if (xdg && xdg[0] != '\0') {
+        return std::string(xdg);
+    }
+    const char *home = getenv("HOME");
+    if (!home) {
+        struct passwd *pw = getpwuid(getuid());
+        if (pw) home = pw->pw_dir;
+    }
+    if (home) {
+        return std::string(home) + "/.cache";
+    }
+    return "/tmp";
+}
+
+std::string PowerTrayApp::get_state_file_path() {
+    return get_cache_dir() + "/power_profile_mode";
+}
+
+std::string PowerTrayApp::get_manager_bin() {
+    std::string home_bin = getenv("HOME") ? (std::string(getenv("HOME")) + "/.local/bin/power-profile-manager") : "";
+    if (!home_bin.empty() && access(home_bin.c_str(), X_OK) == 0) {
+        return home_bin;
+    }
+    if (access("/usr/local/bin/power-profile-manager", X_OK) == 0) {
+        return "/usr/local/bin/power-profile-manager";
+    }
+    char *path = g_find_program_in_path("power-profile-manager");
+    if (path) {
+        std::string res(path);
+        g_free(path);
+        return res;
+    }
+    return "power-profile-manager";
+}
+
+std::string PowerTrayApp::get_current_mode() {
+    std::ifstream file(get_state_file_path());
+    if (file.is_open()) {
+        std::string mode;
+        file >> mode;
+        if (!mode.empty()) return mode;
+    }
+    return "balanced";
+}
+
+void PowerTrayApp::set_current_mode(const std::string &mode) {
+    std::string dir = get_cache_dir();
+    mkdir(dir.c_str(), 0755);
+    std::ofstream file(get_state_file_path());
+    if (file.is_open()) {
+        file << mode << std::endl;
+    }
+}
+
+static std::string format_duration(double hours) {
+    int h = static_cast<int>(hours);
+    int m = static_cast<int>(std::round((hours - h) * 60.0));
+    if (m >= 60) {
+        h += 1;
+        m = 0;
+    }
+    if (h > 0 && m > 0) {
+        return std::to_string(h) + "시간 " + std::to_string(m) + "분";
+    } else if (h > 0) {
+        return std::to_string(h) + "시간";
+    } else if (m > 0) {
+        return std::to_string(m) + "분";
+    } else {
+        return "1분 미만";
+    }
+}
+
+BatteryInfo PowerTrayApp::get_battery_info() {
+    BatteryInfo info;
+    std::string bat_dir = "/sys/class/power_supply/BAT0";
+    if (access(bat_dir.c_str(), F_OK) != 0) {
+        bat_dir = "/sys/class/power_supply/BAT1";
+    }
+
+    if (access(bat_dir.c_str(), F_OK) == 0) {
+        auto read_long = [&](const std::string &file_name, long def_val = 0) -> long {
+            std::ifstream f(bat_dir + "/" + file_name);
+            long val = def_val;
+            if (f.is_open()) f >> val;
+            return val;
+        };
+        auto read_str = [&](const std::string &file_name, const std::string &def_val = "") -> std::string {
+            std::ifstream f(bat_dir + "/" + file_name);
+            std::string val = def_val;
+            if (f.is_open()) f >> val;
+            return val;
+        };
+
+        info.capacity = static_cast<int>(read_long("capacity", 50));
+        info.status = read_str("status", "Discharging");
+        long power_now = read_long("power_now", 0);
+        long voltage_now = read_long("voltage_now", 0);
+        long current_now = read_long("current_now", 0);
+        long energy_now = read_long("energy_now", 0);
+        long energy_full = read_long("energy_full", 0);
+        long energy_full_design = read_long("energy_full_design", 0);
+        info.cycle_count = static_cast<int>(read_long("cycle_count", 0));
+
+        long charge_limit = read_long("charge_control_end_threshold", 0);
+        if (charge_limit <= 0) {
+            charge_limit = read_long("charge_stop_threshold", 100);
+        }
+        if (charge_limit <= 0) charge_limit = 100;
+        info.charge_limit = static_cast<int>(charge_limit);
+
+        if (power_now <= 0 && voltage_now > 0 && current_now > 0) {
+            power_now = (voltage_now / 1000) * (current_now / 1000);
+        }
+
+        if (energy_full_design > 0 && energy_full > 0) {
+            info.health_pct = (static_cast<double>(energy_full) / energy_full_design) * 100.0;
+        }
+
+        if (power_now > 0) {
+            info.power_w = static_cast<double>(power_now) / 1000000.0;
+            if (info.status == "Discharging" && energy_now > 0) {
+                double hours = static_cast<double>(energy_now) / power_now;
+                info.time_str = "약 " + format_duration(hours);
+            } else if (info.status == "Charging") {
+                double target_energy = energy_full * (info.charge_limit / 100.0);
+                double diff = std::max(0.0, target_energy - energy_now);
+                if (diff > 0) {
+                    double hours = diff / power_now;
+                    std::string dur = format_duration(hours);
+                    if (info.charge_limit < 100) {
+                        info.time_str = std::to_string(info.charge_limit) + "%까지 약 " + dur;
+                    } else {
+                        info.time_str = "완충까지 약 " + dur;
+                    }
+                } else {
+                    info.time_str = std::to_string(info.charge_limit) + "% 도달 직전";
+                }
+            }
+        }
+    }
+
+    if (info.charge_limit < 100) {
+        info.protect_str = std::to_string(info.charge_limit) + "% (수명 보호)";
+    } else {
+        info.protect_str = "100% (일반)";
+    }
+
+    info.peripherals = get_peripheral_batteries();
+    return info;
+}
+
+std::vector<PeripheralInfo> PowerTrayApp::get_peripheral_batteries() {
+    std::vector<PeripheralInfo> peripherals;
+    if (!dbus_conn) return peripherals;
+
+    GError *error = nullptr;
+    GVariant *res = g_dbus_connection_call_sync(
+        dbus_conn,
+        "org.freedesktop.UPower",
+        "/org/freedesktop/UPower",
+        "org.freedesktop.UPower",
+        "EnumerateDevices",
+        nullptr,
+        G_VARIANT_TYPE("(ao)"),
+        G_DBUS_CALL_FLAGS_NONE,
+        500,
+        nullptr,
+        &error
+    );
+
+    if (!res) {
+        if (error) g_error_free(error);
+        return peripherals;
+    }
+
+    GVariantIter *iter = nullptr;
+    g_variant_get(res, "(ao)", &iter);
+    const gchar *path = nullptr;
+
+    while (g_variant_iter_loop(iter, "o", &path)) {
+        GVariant *type_var = g_dbus_connection_call_sync(
+            dbus_conn, "org.freedesktop.UPower", path, "org.freedesktop.DBus.Properties",
+            "Get", g_variant_new("(ss)", "org.freedesktop.UPower.Device", "Type"),
+            G_VARIANT_TYPE("(v)"), G_DBUS_CALL_FLAGS_NONE, 300, nullptr, nullptr
+        );
+        if (!type_var) continue;
+
+        GVariant *v = nullptr;
+        g_variant_get(type_var, "(v)", &v);
+        guint32 dev_type = g_variant_get_uint32(v);
+        g_variant_unref(v);
+        g_variant_unref(type_var);
+
+        // Type 2: Mouse, 3: Keyboard, 5: Headset, 6: Headphones, 7: Audio
+        if (dev_type == 2 || dev_type == 3 || dev_type == 5 || dev_type == 6 || dev_type == 7) {
+            GVariant *props = g_dbus_connection_call_sync(
+                dbus_conn, "org.freedesktop.UPower", path, "org.freedesktop.DBus.Properties",
+                "GetAll", g_variant_new("(s)", "org.freedesktop.UPower.Device"),
+                G_VARIANT_TYPE("(a{sv})"), G_DBUS_CALL_FLAGS_NONE, 300, nullptr, nullptr
+            );
+            if (!props) continue;
+
+            GVariantIter *piter = nullptr;
+            g_variant_get(props, "(a{sv})", &piter);
+            const gchar *k = nullptr;
+            GVariant *val = nullptr;
+            std::string model;
+            double pct = 0.0;
+            gboolean is_present = TRUE;
+
+            while (g_variant_iter_loop(piter, "{&sv}", &k, &val)) {
+                if (std::string(k) == "Model") {
+                    model = g_variant_get_string(val, nullptr);
+                } else if (std::string(k) == "Percentage") {
+                    pct = g_variant_get_double(val);
+                } else if (std::string(k) == "IsPresent") {
+                    is_present = g_variant_get_boolean(val);
+                }
+            }
+            g_variant_iter_free(piter);
+            g_variant_unref(props);
+
+            if (is_present && pct > 0.0) {
+                std::string icon = "🎧";
+                if (dev_type == 2) icon = "🖱️";
+                else if (dev_type == 3) icon = "⌨️";
+
+                if (model.empty()) {
+                    model = (dev_type == 2 ? "무선 마우스" : (dev_type == 3 ? "무선 키보드" : "블루투스 음향기기"));
+                }
+                peripherals.push_back({model, icon, static_cast<int>(std::round(pct))});
+            }
+        }
+    }
+
+    g_variant_iter_free(iter);
+    g_variant_unref(res);
+    return peripherals;
+}
+
+void PowerTrayApp::update_icon_label_and_tooltip(const std::string &mode, const BatteryInfo &bat) {
+    int cap = bat.capacity;
+    const std::string &status = bat.status;
+    double power_w = bat.power_w;
+    int charge_limit = bat.charge_limit;
+
+    // 1. 작업표시줄 라벨 (충전 +, 방전 -)
+    std::ostringstream oss_lbl;
+    if (status == "Charging") {
+        oss_lbl << std::fixed << std::setprecision(1) << " ⚡ " << cap << "% (+" << power_w << "W)";
+    } else if (status == "Full" || (status == "Not charging" && cap >= charge_limit)) {
+        oss_lbl << " 🔌 " << cap << "% (대기)";
+    } else {
+        oss_lbl << std::fixed << std::setprecision(1) << " " << cap << "% (-" << power_w << "W)";
+    }
+    app_indicator_set_label(indicator, oss_lbl.str().c_str(), " ⚡ 100% (+00.0W)");
+
+    // 2. 아이콘 설정
+    int pct_10 = std::min(100, std::max(0, static_cast<int>(std::round(cap / 10.0) * 10)));
+    std::string p_name = "balanced";
+    if (mode == "performance") p_name = "performance";
+    else if (mode == "save" || mode == "ultra") p_name = "powersave";
+
+    char icon_buf[128];
+    if (status == "Charging") {
+        snprintf(icon_buf, sizeof(icon_buf), "battery-%03d-charging-profile-%s", pct_10, p_name.c_str());
+    } else {
+        snprintf(icon_buf, sizeof(icon_buf), "battery-%03d-profile-%s", pct_10, p_name.c_str());
+    }
+    app_indicator_set_icon_full(indicator, icon_buf, (std::to_string(cap) + "% - " + mode).c_str());
+
+    // 3. 툴팁 설정 (워드랩 원천 차단: 타이틀 1줄 컴팩트 유지)
+    std::string status_ko = (status == "Charging") ? "충전 중" : ((status == "Discharging") ? "배터리 사용" : "충전 완료");
+    std::string tooltip_title = "배터리 " + std::to_string(cap) + "% (" + status_ko + ")";
+
+    std::map<std::string, std::string> mode_titles = {
+        {"performance", "⚡ 성능 (4.1GHz)"},
+        {"balanced",    "⚖️ 균형 (동적클럭)"},
+        {"save",        "🍃 스마트 절전 (1.7GHz)"},
+        {"ultra",       "🛡️ 극한 초절전 (1.4GHz, 48Hz)"}
+    };
+    std::string mode_title = mode_titles.count(mode) ? mode_titles[mode] : mode;
+
+    std::string power_line;
+    std::string time_line;
+
+    if (status == "Charging") {
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(1) << "⚡ 충전량 : +" << power_w << "W";
+        power_line = ss.str();
+        if (!bat.time_str.empty()) {
+            time_line = "⏳ 충전예상 : " + bat.time_str;
+        }
+    } else if (status == "Full" || (status == "Not charging" && cap >= charge_limit)) {
+        power_line = "🔌 전원 : 어댑터 직결 (" + std::to_string(charge_limit) + "% 대기)";
+    } else {
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(1) << "⚡ 사용량 : -" << power_w << "W";
+        power_line = ss.str();
+        if (!bat.time_str.empty()) {
+            time_line = "⏳ 남은시간 : " + bat.time_str;
+        }
+    }
+
+    std::string protect_line = "🛡️ 보호한도 : " + bat.protect_str;
+    std::ostringstream ss_hlth;
+    ss_hlth << std::fixed << std::setprecision(1) << "🩺 배터리건강 : " << bat.health_pct << "% (" << bat.cycle_count << "회)";
+    std::string health_line = ss_hlth.str();
+
+    std::vector<std::string> body_elements;
+    body_elements.push_back(power_line);
+    if (!time_line.empty()) {
+        body_elements.push_back(time_line);
+    }
+    body_elements.push_back("⚙️ 전원모드 : " + mode_title);
+    body_elements.push_back(protect_line);
+    body_elements.push_back(health_line);
+
+    for (const auto &p : bat.peripherals) {
+        body_elements.push_back(p.icon + " " + p.name + " : " + std::to_string(p.pct) + "%");
+    }
+    body_elements.push_back("📡 무선상태 : Wi-Fi · BT On");
+
+    std::string tooltip_body;
+    for (size_t i = 0; i < body_elements.size(); ++i) {
+        tooltip_body += body_elements[i];
+        if (i + 1 < body_elements.size()) tooltip_body += "\n";
+    }
+
+    app_indicator_set_tooltip_full(indicator, icon_buf, tooltip_title.c_str(), tooltip_body.c_str());
+}
+
+void PowerTrayApp::update_state_ui() {
+    updating_ui = true;
+    std::string mode = get_current_mode();
+    BatteryInfo bat = get_battery_info();
+
+    if (radio_items.count(mode) && radio_items[mode]) {
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(radio_items[mode]), TRUE);
+    }
+
+    update_icon_label_and_tooltip(mode, bat);
+
+    std::string status_ko = (bat.status == "Charging") ? "충전 중" : ((bat.status == "Discharging") ? "배터리 사용 중" : "충전 완료/대기");
+    std::string time_txt = bat.time_str.empty() ? "" : (" (" + bat.time_str + ")");
+    std::string bat_lbl = "🔋 배터리: " + std::to_string(bat.capacity) + "% - " + status_ko + time_txt;
+    gtk_menu_item_set_label(GTK_MENU_ITEM(header_battery), bat_lbl.c_str());
+
+    std::ostringstream oss_pwr;
+    oss_pwr << std::fixed << std::setprecision(2);
+    if (bat.status == "Charging") {
+        oss_pwr << "⚡ 현재 충전량: +" << bat.power_w << " W (어댑터 충전 중)";
+    } else if (bat.status == "Full" || (bat.status == "Not charging" && bat.capacity >= bat.charge_limit)) {
+        oss_pwr << "🔌 외부 AC 전원 연결됨 (보호 한도 " << bat.charge_limit << "% 충전 대기)";
+    } else {
+        oss_pwr << "⚡ 현재 사용량: -" << bat.power_w << " W (배터리 사용 중)";
+    }
+    gtk_menu_item_set_label(GTK_MENU_ITEM(header_power), oss_pwr.str().c_str());
+
+    std::string prot_lbl = "🛡️ 충전 보호: " + bat.protect_str;
+    gtk_menu_item_set_label(GTK_MENU_ITEM(header_protect), prot_lbl.c_str());
+
+    if (!bat.peripherals.empty()) {
+        std::string bt_str;
+        for (size_t i = 0; i < bat.peripherals.size(); ++i) {
+            bt_str += bat.peripherals[i].icon + " " + bat.peripherals[i].name + ": " + std::to_string(bat.peripherals[i].pct) + "%";
+            if (i + 1 < bat.peripherals.size()) bt_str += " · ";
+        }
+        gtk_menu_item_set_label(GTK_MENU_ITEM(header_bt), bt_str.c_str());
+    } else {
+        gtk_menu_item_set_label(GTK_MENU_ITEM(header_bt), "🎧 연결된 무선 기기 없음");
+    }
+
+    updating_ui = false;
+}
+
+void PowerTrayApp::switch_mode(const std::string &mode_key, const std::string &trigger_source) {
+    set_current_mode(mode_key);
+    update_state_ui();
+
+    if (mode_key == "ultra") {
+        g_spawn_command_line_async("kscreen-doctor output.1.mode.2", nullptr);
+        g_spawn_command_line_async("balooctl6 suspend", nullptr);
+        if (trigger_source == "user") {
+            notify_user(
+                "전원 프로파일: [⚡ 극한 초절전 ON]",
+                "시스템: 절전 모드 | 1.4GHz 고정 | 48Hz 다운클럭 | 백라이트MAX\n(※ Wi-Fi와 블루투스는 정상 유지됩니다)",
+                "battery-low"
+            );
+        }
+    } else {
+        g_spawn_command_line_async("kscreen-doctor output.1.mode.1", nullptr);
+        g_spawn_command_line_async("balooctl6 resume", nullptr);
+        if (trigger_source == "user") {
+            if (mode_key == "save") {
+                notify_user("전원 프로파일: [스마트 절전]", "시스템: 절전 모드 | 1.7GHz 상한 및 백라이트 최적화\n(Wi-Fi, BT, 16스레드 100% 정상 작동)", "battery-profile-powersave-symbolic");
+            } else if (mode_key == "balanced") {
+                notify_user("전원 프로파일: [균형]", "시스템: 균형 모드 | 표준 동적 클럭", "battery-profile-balanced-symbolic");
+            } else if (mode_key == "performance") {
+                notify_user("전원 프로파일: [성능]", "시스템: 성능 모드 | 4.1GHz CPU 부스트 활성화", "battery-profile-performance-symbolic");
+            }
+        }
+    }
+
+    std::string os_target = "balanced";
+    if (mode_key == "performance") os_target = "performance";
+    else if (mode_key == "save" || mode_key == "ultra") os_target = "power-saver";
+
+    std::string cmd_ppd = "powerprofilesctl set " + os_target;
+    g_spawn_command_line_async(cmd_ppd.c_str(), nullptr);
+
+    std::string cmd_mgr = "sudo -n " + get_manager_bin() + " " + mode_key;
+    g_spawn_command_line_async(cmd_mgr.c_str(), nullptr);
+}
+
+void PowerTrayApp::on_radio_toggled(GtkCheckMenuItem *item, const std::string &mode_key) {
+    if (updating_ui) return;
+    if (gtk_check_menu_item_get_active(item)) {
+        switch_mode(mode_key, "user");
+    }
+}
+
+void PowerTrayApp::show_detailed_status() {
+    std::string mgr = get_manager_bin();
+    std::string cmd = "sudo -n " + mgr + " status";
+    gchar *stdout_str = nullptr;
+    gchar *stderr_str = nullptr;
+    GError *error = nullptr;
+
+    if (g_spawn_command_line_sync(cmd.c_str(), &stdout_str, &stderr_str, nullptr, &error)) {
+        std::string res = stdout_str ? stdout_str : "";
+        notify_user("전원 관리 상세 정보", res, "dialog-information");
+        g_free(stdout_str);
+        g_free(stderr_str);
+    } else {
+        std::string err_msg = error ? error->message : "실행 실패";
+        notify_user("오류", err_msg, "dialog-error");
+        if (error) g_error_free(error);
+    }
+}
+
+void PowerTrayApp::notify_user(const std::string &title, const std::string &msg, const std::string &icon) {
+    char *argv[] = {
+        (char*)"notify-send",
+        (char*)"-t", (char*)"4000",
+        (char*)"-i", (char*)icon.c_str(),
+        (char*)title.c_str(),
+        (char*)msg.c_str(),
+        nullptr
+    };
+    g_spawn_async(nullptr, argv, nullptr, G_SPAWN_SEARCH_PATH, nullptr, nullptr, nullptr, nullptr);
+}
+
+// ==============================================================================
+// D-Bus Signal Listener (Bidirectional Sync)
+// ==============================================================================
+
+static void on_dbus_signal_static(
+    GDBusConnection *conn,
+    const gchar *sender_name,
+    const gchar *object_path,
+    const gchar *interface_name,
+    const gchar *signal_name,
+    GVariant *parameters,
+    gpointer user_data)
+{
+    (void)conn;
+    (void)sender_name;
+    (void)object_path;
+    (void)interface_name;
+    (void)signal_name;
+
+    PowerTrayApp *app = static_cast<PowerTrayApp*>(user_data);
+    if (!parameters || !app) return;
+
+    const gchar *iface = nullptr;
+    GVariantIter *changed_props = nullptr;
+    g_variant_get(parameters, "(&sa{sv}as)", &iface, &changed_props, nullptr);
+
+    if (std::string(iface) == "net.hadess.PowerProfiles") {
+        const gchar *key = nullptr;
+        GVariant *val = nullptr;
+        while (g_variant_iter_loop(changed_props, "{&sv}", &key, &val)) {
+            if (std::string(key) == "ActiveProfile") {
+                const gchar *new_prof = g_variant_get_string(val, nullptr);
+                app->on_dbus_signal(new_prof ? new_prof : "");
+            }
+        }
+    }
+    if (changed_props) g_variant_iter_free(changed_props);
+}
+
+void PowerTrayApp::on_dbus_signal(const std::string &new_os_profile) {
+    std::string current_mode = get_current_mode();
+    std::string target_mode = current_mode;
+
+    if (new_os_profile == "performance") {
+        target_mode = "performance";
+    } else if (new_os_profile == "balanced") {
+        target_mode = "balanced";
+    } else if (new_os_profile == "power-saver") {
+        if (current_mode != "ultra") {
+            target_mode = "save";
+        }
+    }
+
+    if (target_mode != current_mode) {
+        switch_mode(target_mode, "dbus");
+    }
+}
+
+void PowerTrayApp::setup_dbus_listener() {
+    GError *error = nullptr;
+    dbus_conn = g_bus_get_sync(G_BUS_TYPE_SYSTEM, nullptr, &error);
+    if (!dbus_conn) {
+        if (error) g_error_free(error);
+        return;
+    }
+
+    dbus_sub_id = g_dbus_connection_signal_subscribe(
+        dbus_conn,
+        "net.hadess.PowerProfiles",
+        "org.freedesktop.DBus.Properties",
+        "PropertiesChanged",
+        "/net/hadess/PowerProfiles",
+        "net.hadess.PowerProfiles",
+        G_DBUS_SIGNAL_FLAGS_NONE,
+        on_dbus_signal_static,
+        this,
+        nullptr
+    );
+}
+
+// ==============================================================================
+// Menu Construction & Callbacks
+// ==============================================================================
+
+void PowerTrayApp::build_menu() {
+    header_battery = gtk_menu_item_new_with_label("🔋 배터리 정보 로딩 중...");
+    gtk_widget_set_sensitive(header_battery, FALSE);
+    gtk_widget_show(header_battery);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), header_battery);
+
+    header_power = gtk_menu_item_new_with_label("⚡ 전력 정보 로딩 중...");
+    gtk_widget_set_sensitive(header_power, FALSE);
+    gtk_widget_show(header_power);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), header_power);
+
+    header_protect = gtk_menu_item_new_with_label("🛡️ 배터리 보호 로딩 중...");
+    gtk_widget_set_sensitive(header_protect, FALSE);
+    gtk_widget_show(header_protect);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), header_protect);
+
+    header_bt = gtk_menu_item_new_with_label("🎧 블루투스 기기 조회 중...");
+    gtk_widget_set_sensitive(header_bt, FALSE);
+    gtk_widget_show(header_bt);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), header_bt);
+
+    GtkWidget *sep1 = gtk_separator_menu_item_new();
+    gtk_widget_show(sep1);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), sep1);
+
+    std::vector<std::pair<std::string, std::string>> modes = {
+        {"performance", "⚡ 성능 (4.1GHz 부스트)"},
+        {"balanced",    "⚖️ 균형 (표준 동적 클럭)"},
+        {"save",        "🍃 스마트 절전 (1.7GHz 상한, 16T 유지)"},
+        {"ultra",       "🛡️ 극한 초절전 (1.4GHz, 48Hz, 백라이트MAX)"}
+    };
+
+    for (const auto &m : modes) {
+        GtkWidget *item = gtk_radio_menu_item_new_with_label(radio_group, m.second.c_str());
+        radio_group = gtk_radio_menu_item_get_group(GTK_RADIO_MENU_ITEM(item));
+
+        RadioCallbackData *cb_data = new RadioCallbackData{this, m.first};
+        g_signal_connect(item, "toggled", G_CALLBACK(radio_callback), cb_data);
+
+        gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+        gtk_widget_show(item);
+        radio_items[m.first] = item;
+    }
+
+    GtkWidget *sep2 = gtk_separator_menu_item_new();
+    gtk_widget_show(sep2);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), sep2);
+
+    GtkWidget *detail_item = gtk_menu_item_new_with_label("📊 하드웨어 상세 정보 보기 (알림창)");
+    g_signal_connect(detail_item, "activate", G_CALLBACK(detail_callback), this);
+    gtk_widget_show(detail_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), detail_item);
+}
+
+gboolean PowerTrayApp::timer_callback(gpointer user_data) {
+    PowerTrayApp *app = static_cast<PowerTrayApp*>(user_data);
+    if (app) {
+        app->update_state_ui();
+    }
+    return TRUE;
+}
+
+void PowerTrayApp::radio_callback(GtkCheckMenuItem *item, gpointer user_data) {
+    RadioCallbackData *data = static_cast<RadioCallbackData*>(user_data);
+    if (data && data->app) {
+        data->app->on_radio_toggled(item, data->mode_key);
+    }
+}
+
+void PowerTrayApp::detail_callback(GtkMenuItem *item, gpointer user_data) {
+    (void)item;
+    PowerTrayApp *app = static_cast<PowerTrayApp*>(user_data);
+    if (app) {
+        app->show_detailed_status();
+    }
+}
+
+// ==============================================================================
+// Main Entrypoint
+// ==============================================================================
+
+int main(int argc, char **argv) {
+    gtk_init(&argc, &argv);
+    PowerTrayApp app;
+    app.run();
+    return 0;
+}

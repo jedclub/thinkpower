@@ -63,7 +63,7 @@ Check your available modes using `kscreen-doctor`:
 ```bash
 kscreen-doctor -o
 ```
-Find the index of your lowest acceptable refresh rate mode (e.g. `output.eDP-1.mode.2` or `output.1.mode.2`), and adjust the call in `src/power-tray.py`.
+Find the index of your lowest acceptable refresh rate mode (e.g. `output.eDP-1.mode.2` or `output.1.mode.2`), and adjust the call in `src/power-tray.cpp`.
 
 ---
 

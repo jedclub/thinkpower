@@ -16,8 +16,8 @@ rm -f "$HOME/.config/systemd/user/power-tray.service"
 systemctl --user daemon-reload
 
 echo "▶ [2/4] 바이너리 파일 제거..."
-rm -f "$HOME/.local/bin/power-tray.py"
-sudo rm -f "/usr/local/bin/power-profile-manager"
+rm -f "$HOME/.local/bin/power-tray" "$HOME/.local/bin/power-tray.py"
+sudo rm -f "/usr/local/bin/power-profile-manager" "/usr/local/bin/power-tray"
 
 echo "▶ [3/4] sudoers 권한 파일 제거..."
 sudo rm -f "/etc/sudoers.d/99-power-profile-manager"

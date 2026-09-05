@@ -76,7 +76,7 @@ ThinkPower communicates with `power-profiles-daemon` over the system D-Bus:
 ```mermaid
 graph TD
     subgraph "Desktop Session (User Space)"
-        A["power-tray.py (GTK3 / AyatanaAppIndicator)"]
+        A["power-tray (Native C++ / AyatanaAppIndicator)"]
         A -->|D-Bus Query| B["UPower (Battery & Bluetooth Peripherals)"]
         A -->|D-Bus Listen| C["power-profiles-daemon"]
         A -->|KWin Wayland IPC| D["kscreen-doctor (Display Mode)"]

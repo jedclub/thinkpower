@@ -7,3 +7,5 @@ tmp/
 *.swp
 *.bak
 .DS_Store
+build/
+bin/

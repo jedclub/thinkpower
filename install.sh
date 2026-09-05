@@ -18,10 +18,11 @@ echo "========================================================="
 # 1. 디렉토리 준비
 mkdir -p "$BIN_DIR" "$SYSTEMD_USER_DIR" "$AUTOSTART_DIR" "$APPS_DIR" "$HOME/.cache"
 
-# 2. 실행 파일 복사
-echo "▶ [1/5] 바이너리 파일 설치 중..."
-cp "$SCRIPT_DIR/src/power-tray.py" "$BIN_DIR/power-tray.py"
-chmod +x "$BIN_DIR/power-tray.py"
+# 2. C++ 네이티브 바이너리 빌드 및 설치
+echo "▶ [1/5] C++ 네이티브 트레이 바이너리 빌드 및 설치 중..."
+make -C "$SCRIPT_DIR" -j$(nproc)
+cp "$SCRIPT_DIR/bin/power-tray" "$BIN_DIR/power-tray"
+chmod +x "$BIN_DIR/power-tray"
 
 echo "▶ [2/5] 루트 하드웨어 관리자 설치 중 (/usr/local/bin)..."
 sudo cp "$SCRIPT_DIR/src/power-profile-manager" "/usr/local/bin/power-profile-manager"

@@ -71,15 +71,15 @@ Default Linux desktop power managers only set high-level ACPI platform hints. Un
 
 ```mermaid
 graph TD
-    UI["KDE Taskbar System Tray (power-tray.py)"]
+    UI["KDE Taskbar System Tray (power-tray Native C++)"]
     
     subgraph "1. Information & Peripheral Monitoring"
-        UI -->|Sysfs Polling| K1["/sys/class/power_supply/BAT0/ (Capacity, Wattage, Threshold)"]
-        UI -->|D-Bus Query| K2["UPower / BlueZ (Headphones, Mice, Keyboards)"]
+        UI -->|Sysfs Direct Read| K1["/sys/class/power_supply/BAT0/ (Capacity, Wattage, Threshold)"]
+        UI -->|GDBus Query| K2["UPower / BlueZ (Headphones, Mice, Keyboards)"]
     end
 
     subgraph "2. System Standards Sync"
-        UI -->|D-Bus PropertiesChanged| K3["power-profiles-daemon (Standard OS Profile)"]
+        UI -->|GDBus Signal Listen| K3["power-profiles-daemon (Standard OS Profile)"]
         UI -->|KWin Wayland IPC| K4["kscreen-doctor (48Hz / 60Hz Refresh Rate)"]
     end
 
@@ -103,10 +103,12 @@ thinkpower/
 ├── .gitignore
 ├── LICENSE                          # MIT License
 ├── README.md                        # Master Documentation
-├── install.sh                       # One-Click Installer
+├── Makefile                         # High-performance native build script
+├── CMakeLists.txt                   # Standard CMake configuration
+├── install.sh                       # One-Click Builder & Installer
 ├── uninstall.sh                     # Clean Uninstaller
 ├── src/
-│   ├── power-tray.py                # Main GTK3 / AyatanaAppIndicator Tray Applet
+│   ├── power-tray.cpp               # Native C++17 AyatanaAppIndicator Tray Applet
 │   ├── power-profile-manager        # Privileged Hardware Silicon Tuner
 │   └── config/
 │       ├── power-tray.service       # systemd user service unit
@@ -126,26 +128,26 @@ thinkpower/
 
 ### 1. Prerequisites
 
-Make sure the following runtime packages are installed on your distribution:
+Make sure the following build and runtime packages are installed on your distribution:
 
 **Arch Linux / CachyOS / Manjaro**:
 ```bash
-sudo pacman -S python-gobject libayatana-appindicator power-profiles-daemon upower libnotify
+sudo pacman -S base-devel cmake gcc pkgconf libayatana-appindicator gtk3 glib2 power-profiles-daemon upower libnotify
 ```
 
 **Fedora**:
 ```bash
-sudo dnf install python3-gobject libayatana-appindicator power-profiles-daemon upower libnotify
+sudo dnf install gcc-c++ make cmake pkgconfig libayatana-appindicator-devel gtk3-devel glib2-devel power-profiles-daemon upower libnotify
 ```
 
 **Debian / Ubuntu**:
 ```bash
-sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1 power-profiles-daemon upower libnotify-bin
+sudo apt install build-essential cmake pkg-config libayatana-appindicator3-dev libgtk-3-dev libglib2.0-dev power-profiles-daemon upower libnotify-bin
 ```
 
 ### 2. Quick Install
 
-Clone the repository and run the installer:
+Clone the repository and run the automated build and installation script:
 
 ```bash
 git clone https://github.com/your-username/thinkpower.git
@@ -154,11 +156,12 @@ cd thinkpower
 ```
 
 The installer will:
-1. Place `power-tray.py` in `~/.local/bin/`.
-2. Install `power-profile-manager` in `/usr/local/bin/`.
-3. Configure the passwordless sudoers drop-in in `/etc/sudoers.d/99-power-profile-manager`.
-4. Register and start the `power-tray.service` systemd user service.
-5. Create desktop entries in `~/.config/autostart/` and `~/.local/share/applications/`.
+1. Compile the native C++ binary (`bin/power-tray`) using `make`.
+2. Install `power-tray` in `~/.local/bin/`.
+3. Install `power-profile-manager` in `/usr/local/bin/`.
+4. Configure the passwordless sudoers drop-in in `/etc/sudoers.d/99-power-profile-manager`.
+5. Register and start the `power-tray.service` systemd user service.
+6. Create desktop entries in `~/.config/autostart/` and `~/.local/share/applications/`.
 
 ---
 
