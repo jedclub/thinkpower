@@ -14,10 +14,79 @@
 #include <cstdlib>
 #include <unistd.h>
 #include <pwd.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 
+#if defined(__AVX2__)
+#include <immintrin.h>
+#define THINKPOWER_HAS_AVX2 1
+#endif
+
 static const char *APPINDICATOR_ID = "power_profile_indicator";
+
+// Direct low-level syscall reader (avoids std::ifstream locale and virtual dispatch overhead)
+static inline bool fast_read_sysfs(const std::string &path, char *out_buf, size_t max_len) {
+    int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return false;
+    ssize_t n = read(fd, out_buf, max_len - 1);
+    close(fd);
+    if (n <= 0) return false;
+    out_buf[n] = '\0';
+    while (n > 0 && (out_buf[n - 1] == '\n' || out_buf[n - 1] == '\r' || out_buf[n - 1] == ' ' || out_buf[n - 1] == '\t')) {
+        out_buf[--n] = '\0';
+    }
+    return true;
+}
+
+static inline long fast_parse_long_buf(const char *buf, long def_val = 0) {
+    while (*buf == ' ' || *buf == '\t' || *buf == '\n') buf++;
+    if (*buf == '\0') return def_val;
+    bool neg = false;
+    if (*buf == '-') { neg = true; buf++; }
+    long val = 0;
+    while (*buf >= '0' && *buf <= '9') {
+        val = val * 10 + (*buf - '0');
+        buf++;
+    }
+    return neg ? -val : val;
+}
+
+// 256-bit AVX2 SIMD Vectorized Moving Average Filter for Wattage
+struct alignas(32) PowerFilterSIMD {
+    static constexpr size_t SAMPLES = 8;
+    double history[SAMPLES] = {0.0};
+    size_t count = 0;
+    size_t head = 0;
+
+    void add_sample(double w) {
+        history[head] = w;
+        head = (head + 1) % SAMPLES;
+        if (count < SAMPLES) count++;
+    }
+
+    double get_average() const {
+        if (count == 0) return 0.0;
+#if THINKPOWER_HAS_AVX2
+        // 256-bit AVX2 SIMD reduction across 8 double-precision floats
+        __m256d ymm0 = _mm256_load_pd(&history[0]);
+        __m256d ymm1 = _mm256_load_pd(&history[4]);
+        __m256d ymm_sum = _mm256_add_pd(ymm0, ymm1);
+
+        __m128d hi = _mm256_extractf128_pd(ymm_sum, 1);
+        __m128d lo = _mm256_castpd256_pd128(ymm_sum);
+        __m128d sum128 = _mm_add_pd(lo, hi);
+        __m128d high_pair = _mm_unpackhi_pd(sum128, sum128);
+        __m128d final_sum = _mm_add_sd(sum128, high_pair);
+
+        return _mm_cvtsd_f64(final_sum) / static_cast<double>(count);
+#else
+        double sum = 0.0;
+        for (size_t i = 0; i < count; ++i) sum += history[i];
+        return sum / static_cast<double>(count);
+#endif
+    }
+};
 
 struct PeripheralInfo {
     std::string name;
@@ -82,6 +151,7 @@ private:
     bool updating_ui = false;
     GDBusConnection *dbus_conn = nullptr;
     guint dbus_sub_id = 0;
+    PowerFilterSIMD power_filter;
 };
 
 struct RadioCallbackData {
@@ -206,17 +276,18 @@ BatteryInfo PowerTrayApp::get_battery_info() {
     }
 
     if (access(bat_dir.c_str(), F_OK) == 0) {
+        char buf[64];
         auto read_long = [&](const std::string &file_name, long def_val = 0) -> long {
-            std::ifstream f(bat_dir + "/" + file_name);
-            long val = def_val;
-            if (f.is_open()) f >> val;
-            return val;
+            if (fast_read_sysfs(bat_dir + "/" + file_name, buf, sizeof(buf))) {
+                return fast_parse_long_buf(buf, def_val);
+            }
+            return def_val;
         };
         auto read_str = [&](const std::string &file_name, const std::string &def_val = "") -> std::string {
-            std::ifstream f(bat_dir + "/" + file_name);
-            std::string val = def_val;
-            if (f.is_open()) f >> val;
-            return val;
+            if (fast_read_sysfs(bat_dir + "/" + file_name, buf, sizeof(buf))) {
+                return std::string(buf);
+            }
+            return def_val;
         };
 
         info.capacity = static_cast<int>(read_long("capacity", 50));
@@ -246,14 +317,18 @@ BatteryInfo PowerTrayApp::get_battery_info() {
 
         if (power_now > 0) {
             info.power_w = static_cast<double>(power_now) / 1000000.0;
+            power_filter.add_sample(info.power_w);
+            double smooth_w = power_filter.get_average();
+            double calc_power = (smooth_w > 0.0) ? (smooth_w * 1000000.0) : static_cast<double>(power_now);
+
             if (info.status == "Discharging" && energy_now > 0) {
-                double hours = static_cast<double>(energy_now) / power_now;
+                double hours = static_cast<double>(energy_now) / calc_power;
                 info.time_str = "약 " + format_duration(hours);
             } else if (info.status == "Charging") {
                 double target_energy = energy_full * (info.charge_limit / 100.0);
                 double diff = std::max(0.0, target_energy - energy_now);
                 if (diff > 0) {
-                    double hours = diff / power_now;
+                    double hours = diff / calc_power;
                     std::string dur = format_duration(hours);
                     if (info.charge_limit < 100) {
                         info.time_str = std::to_string(info.charge_limit) + "%까지 약 " + dur;
@@ -741,10 +816,43 @@ void PowerTrayApp::detail_callback(GtkMenuItem *item, gpointer user_data) {
 }
 
 // ==============================================================================
+// PGO (Profile-Guided Optimization) Training Benchmark
+// ==============================================================================
+
+static void run_pgo_training(size_t iterations) {
+    PowerFilterSIMD filter;
+    std::cout << "[PGO] Running training workload (" << iterations << " iterations with AVX2 SIMD)..." << std::endl;
+    for (size_t i = 0; i < iterations; ++i) {
+        char buf[64];
+        long cap = 75;
+        if (fast_read_sysfs("/sys/class/power_supply/BAT0/capacity", buf, sizeof(buf))) {
+            cap = fast_parse_long_buf(buf, 75);
+        }
+        (void)cap;
+
+        double sample = 14.5 + (i % 8) * 0.7;
+        filter.add_sample(sample);
+        double avg = filter.get_average();
+        (void)avg;
+
+        std::string dur = format_duration(1.2 + (i % 6) * 0.3);
+        (void)dur;
+    }
+    std::cout << "[PGO] Training complete. Profile data captured." << std::endl;
+}
+
+// ==============================================================================
 // Main Entrypoint
 // ==============================================================================
 
 int main(int argc, char **argv) {
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--train" || std::string(argv[i]) == "--benchmark") {
+            run_pgo_training(500000);
+            return 0;
+        }
+    }
+
     gtk_init(&argc, &argv);
     PowerTrayApp app;
     app.run();

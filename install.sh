@@ -18,11 +18,15 @@ echo "========================================================="
 # 1. 디렉토리 준비
 mkdir -p "$BIN_DIR" "$SYSTEMD_USER_DIR" "$AUTOSTART_DIR" "$APPS_DIR" "$HOME/.cache"
 
-# 2. C++ 네이티브 바이너리 빌드 및 설치
-echo "▶ [1/5] C++ 네이티브 트레이 바이너리 빌드 및 설치 중..."
-make -C "$SCRIPT_DIR" -j$(nproc)
-cp "$SCRIPT_DIR/bin/power-tray" "$BIN_DIR/power-tray"
-chmod +x "$BIN_DIR/power-tray"
+# 2. C++ 네이티브 바이너리 빌드 및 설치 (PGO + AVX2 + LTO 최적화)
+echo "▶ [1/5] C++ PGO + AVX2 극한 최적화 빌드 진행 중..."
+if make -C "$SCRIPT_DIR" pgo; then
+    echo "  -> PGO 최적화 빌드 완료"
+else
+    echo "  -> 기본 LTO 네이티브 빌드로 대체"
+    make -C "$SCRIPT_DIR" -j$(nproc)
+fi
+install -m 755 "$SCRIPT_DIR/bin/power-tray" "$BIN_DIR/power-tray"
 
 echo "▶ [2/5] 루트 하드웨어 관리자 설치 중 (/usr/local/bin)..."
 sudo cp "$SCRIPT_DIR/src/power-profile-manager" "/usr/local/bin/power-profile-manager"
