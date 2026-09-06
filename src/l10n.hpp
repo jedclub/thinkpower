@@ -873,4 +873,8 @@ inline const char* tr(StrId id) {
     return LocaleManager::instance().tr(id);
 }
 
+inline bool is_korean() {
+    return LocaleManager::instance().get_lang() == Lang::KO;
+}
+
 } // namespace L10n
