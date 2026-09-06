@@ -167,11 +167,11 @@ Pre-compiled and optimized packages are automatically built and published with e
 
 👉 **[Download Latest Release (v1.0.0)](https://github.com/jedclub/thinkpower/releases/latest)**
 
-| Package Format | Target Distribution | Installation Command |
-| :--- | :--- | :--- |
-| **`.deb`** | Ubuntu, Debian, Linux Mint, Pop!_OS | `sudo apt install ./thinkpower_1.0.0_amd64.deb` |
-| **`.pkg.tar.zst`** | Arch Linux, CachyOS, Manjaro, EndeavourOS | `sudo pacman -U thinkpower-1.0.0-1-x86_64.pkg.tar.zst` |
-| **`.tar.gz`** | Generic Linux (Standalone binaries) | Extract & run `./install.sh` |
+| Target Distribution | Package Format | Direct One-Line Installation |
+| :--- | :---: | :--- |
+| **🚀 CachyOS / Arch Linux** (Primary) | **`.pkg.tar.zst`** | `sudo pacman -U thinkpower-1.0.0-1-x86_64.pkg.tar.zst` |
+| **Debian / Ubuntu / Mint** | **`.deb`** | `sudo apt install ./thinkpower_1.0.0_amd64.deb` |
+| **Generic Linux (Any Distro)** | **`.tar.gz`** | Extract & run `./install.sh` |
 
 ---
 
