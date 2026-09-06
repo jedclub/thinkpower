@@ -77,6 +77,8 @@ KBD_BACKUP="${CACHE_DIR}/prev_kbd_backlight"
 DISP_BACKUP="${CACHE_DIR}/prev_display_brightness"
 KDE_ANIM_BACKUP="${CACHE_DIR}/prev_kde_anim_factor"
 BT_BACKUP="${CACHE_DIR}/prev_bluetooth_state"
+WAYDROID_BACKUP="${CACHE_DIR}/prev_waydroid_state"
+AVAHI_BACKUP="${CACHE_DIR}/prev_avahi_state"
 KWIN_HEAVY_EFFECTS="blur slidingpopups slidingnotifications slide squash scale fadingpopups blendchanges"
 
 # --internal / --quiet 플래그 확인 (power-tray 등 내부 호출 시 중복 PPD/알림 차단)
@@ -275,6 +277,19 @@ restore_common_hardware() {
             rfkill unblock bluetooth >/dev/null 2>&1 || true
             (sleep 0.1 && run_as_user bluetoothctl power on >/dev/null 2>&1) &
         fi
+    fi
+
+    # [7. 백그라운드 서비스 및 데몬 정상 재개 (Background Services Resume)]
+    killall -CONT ksystemstats 2>/dev/null || true
+    killall -CONT kdeconnectd 2>/dev/null || true
+    killall -CONT ananicy-cpp 2>/dev/null || true
+    if [ -f "$AVAHI_BACKUP" ] || [ "$force_all" -eq 1 ]; then
+        systemctl start avahi-daemon.service >/dev/null 2>&1 || true
+        rm -f "$AVAHI_BACKUP" 2>/dev/null || true
+    fi
+    if [ -f "$WAYDROID_BACKUP" ] || [ "$force_all" -eq 1 ]; then
+        systemctl start waydroid-container.service >/dev/null 2>&1 || true
+        rm -f "$WAYDROID_BACKUP" 2>/dev/null || true
     fi
 }
 
@@ -504,12 +519,35 @@ set_ultra() {
     fi
     rfkill block bluetooth 2>/dev/null || true
 
-    # 12. PPD 및 알림
+    # 12. 백그라운드 비필수 데몬 및 서비스 동결/중단 (Background Services Power-Down)
+    # 12-1. 불필요하게 센서/프로세스를 풀스캔하는 유저 세션 데몬 일시 정지 (SIGSTOP: 메모리 유지, CPU 웨이크업 0%)
+    killall -STOP ksystemstats 2>/dev/null || true
+    killall -STOP kdeconnectd 2>/dev/null || true
+    killall -STOP ananicy-cpp 2>/dev/null || true
+
+    # 12-2. 네트워크 mDNS 브로드캐스트 방지 (Wi-Fi 무선 DTIM 슬립 유지)
+    if systemctl is-active avahi-daemon.service >/dev/null 2>&1; then
+        echo 1 > "$AVAHI_BACKUP"
+        chmod 666 "$AVAHI_BACKUP" 2>/dev/null || true
+        systemctl stop avahi-daemon.service 2>/dev/null || true
+    fi
+
+    # 12-3. 미사용 Waydroid LXC 컨테이너 파워다운 (세션이 비활성일 때만 컨테이너 데몬 중지)
+    if systemctl is-active waydroid-container.service >/dev/null 2>&1; then
+        local w_session; w_session=$(waydroid status 2>/dev/null | grep -i "Session:" | awk '{print $2}' || echo "STOPPED")
+        if [ "$w_session" = "STOPPED" ] || [ -z "$w_session" ]; then
+            echo 1 > "$WAYDROID_BACKUP"
+            chmod 666 "$WAYDROID_BACKUP" 2>/dev/null || true
+            systemctl stop waydroid-container.service 2>/dev/null || true
+        fi
+    fi
+
+    # 13. PPD 및 알림
     if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
         powerprofilesctl set power-saver >/dev/null 2>&1 || true
         run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-powersave-symbolic -t 4000 \
             "전원 프로파일: [초절전]" \
-            "CPU 1.4GHz+teo | SMU 4W | 화면 20% | 키보드 OFF | BT OFF | GPU 40%\n(※ 16스레드 및 60Hz 정상 가동)"
+            "CPU 1.4GHz+teo | SMU 4W | 백그라운드 절전 | 화면 20% | BT OFF\n(※ 16스레드 및 60Hz 정상 가동)"
     fi
 }
 
@@ -562,6 +600,11 @@ show_status() {
     fi
     echo "  - Wi-Fi (무선랜)  : 정상 가동 (인터넷 유지)"
     echo "  - 블루투스 (BT)   : $bt_stat"
+    local bg_stat="정상 가동 (Active)"
+    if [ "$CURRENT" = "ultra" ]; then
+        bg_stat="초절전 동결 (ksystemstats, ananicy, avahi 등 일시 정지)"
+    fi
+    echo "  - 백그라운드 데몬 : $bg_stat"
     IDLE_GOV=$(cat /sys/devices/system/cpu/cpuidle/current_governor 2>/dev/null || echo "?")
     THP=$(cat /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null | grep -o '\[.*\]' | tr -d '[]' || echo "?")
     SWAP_VAL=$(cat /proc/sys/vm/swappiness 2>/dev/null || echo "?")
@@ -779,7 +822,7 @@ set_restore() {
     powerprofilesctl set balanced >/dev/null 2>&1 || true
 
     # 6. 잔여 백업 파일 완전 정리
-    rm -f "$KBD_BACKUP" "$DISP_BACKUP" "$KDE_ANIM_BACKUP" "$BT_BACKUP" 2>/dev/null || true
+    rm -f "$KBD_BACKUP" "$DISP_BACKUP" "$KDE_ANIM_BACKUP" "$BT_BACKUP" "$WAYDROID_BACKUP" "$AVAHI_BACKUP" 2>/dev/null || true
 
     # 7. 알림 (power-tray 미사용 단독 CLI 실행 시에만 알림)
     if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
