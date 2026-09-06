@@ -1,10 +1,12 @@
 # ⚡ ThinkPower
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![CI](https://github.com/jedclub/thinkpower/actions/workflows/ci.yml/badge.svg)](https://github.com/jedclub/thinkpower/actions/workflows/ci.yml)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20(KDE%20Plasma%206%20Wayland)-orange.svg)]()
 [![Hardware](https://img.shields.io/badge/Target-ThinkPad%20%7C%20AMD%20Ryzen-red.svg)]()
 [![Language](https://img.shields.io/badge/Language-C%2B%2B17%20%7C%20AVX2-00599C.svg?logo=c%2B%2B)]()
-[![Build](https://img.shields.io/badge/Optimization-PGO%20%2B%20LTO-brightgreen.svg)]()
+[![Build](https://img.shields.io/badge/Optimization-PGO%20%2B%20LTO%20%2B%20x86--64--v3-brightgreen.svg)]()
+[![L10n](https://img.shields.io/badge/L10n-11%20Languages-blueviolet.svg)]()
 [![Shell](https://img.shields.io/badge/Bash-Script-green.svg)]()
 
 > **Advanced 4-Stage Hardware Power Profile & Battery Management Tray for Linux**  
@@ -161,21 +163,36 @@ sudo pacman -U thinkpower-1.0.0-1-x86_64.pkg.tar.zst
 systemctl --user enable --now power-tray.service
 ```
 
-### 3. Universal Release Build & Tarball
+### 3. Debian / Ubuntu / Linux Mint / Pop!_OS (.deb)
 
-To generate all distribution packages in one command:
+```bash
+# 1. Build .deb package (with PGO + AVX2 + LTO)
+make deb
+
+# 2. Install using apt
+sudo apt install ./release/thinkpower_1.0.0_amd64.deb
+
+# 3. Enable and start user daemon
+systemctl --user enable --now power-tray.service
+```
+
+### 4. Universal Release Packages & All-In-One Build
+
+To generate all distribution packages with extreme optimization in one command:
 
 ```bash
 make release
 ```
 
-This will automatically create:
-- **`thinkpower-1.0.0-1-x86_64.pkg.tar.zst`**: Native Arch/CachyOS package.
-- **`release/thinkpower-1.0.0-linux-x86_64.tar.gz`**: Standalone portable distribution archive with built-in installer.
+This automatically generates all release artifacts in `release/`:
+- **`thinkpower-1.0.0-1-x86_64.pkg.tar.zst`**: Native Arch Linux & CachyOS package.
+- **`thinkpower_1.0.0_amd64.deb`**: Debian & Ubuntu package.
+- **`thinkpower-1.0.0-linux-x86_64.tar.gz`**: Universal portable distribution archive with standalone installer.
+- **`SHA256SUMS.txt`**: Cryptographic integrity checksums.
 
-### 4. Local Quick Script Install
+### 5. Local Quick Script Install
 
-Alternatively, you can build and install directly to `~/.local/bin/` without building a package:
+Alternatively, build and install directly to `~/.local/bin/` without packaging:
 
 ```bash
 ./install.sh

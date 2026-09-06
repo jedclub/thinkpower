@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 1.0.0)'
+        required: true
+        default: '1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-arch:
+    name: Build Arch/CachyOS Package
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            git \
+            gtk3 \
+            libayatana-appindicator \
+            glib2 \
+            sudo
+
+      - name: Build package with makepkg
+        run: |
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          chown -R builder:builder .
+          su builder -c "makepkg -f --nodeps"
+
+      - name: Upload Arch Package Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: arch-package
+          path: "*.pkg.tar.zst"
+
+  build-and-publish:
+    name: Build Debian/Universal & Publish Release
+    runs-on: ubuntu-latest
+    needs: build-arch
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine Version
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VER="${{ github.event.inputs.version }}"
+          else
+            VER="${GITHUB_REF#refs/tags/v}"
+          fi
+          echo "VERSION=${VER}" >> $GITHUB_OUTPUT
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            libglib2.0-dev
+
+      - name: Extreme Optimized PGO Build (x86-64-v3)
+        run: |
+          make pgo MARCH=x86-64-v3 MTUNE=generic
+          ./bin/power-tray --train
+
+      - name: Build Debian Package (.deb)
+        run: |
+          ./packaging/build-deb.sh "${{ steps.get_version.outputs.VERSION }}" amd64
+
+      - name: Build Universal Standalone Tarball (.tar.gz)
+        run: |
+          VER="${{ steps.get_version.outputs.VERSION }}"
+          DIST_DIR="release/thinkpower-${VER}"
+          mkdir -p "$DIST_DIR"
+          cp -a bin src packaging install.sh uninstall.sh LICENSE README.md Makefile CMakeLists.txt "$DIST_DIR/"
+          tar -czf "release/thinkpower-${VER}-linux-x86_64.tar.gz" -C release "thinkpower-${VER}"
+          rm -rf "$DIST_DIR"
+
+      - name: Download Arch Package Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: arch-package
+          path: release/
+
+      - name: Generate SHA256 Checksums
+        run: |
+          cd release
+          sha256sum thinkpower* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release & Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name || format('v{0}', steps.get_version.outputs.VERSION) }}
+          name: "ThinkPower v${{ steps.get_version.outputs.VERSION }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            release/*.pkg.tar.zst
+            release/*.deb
+            release/*.tar.gz
+            release/SHA256SUMS.txt

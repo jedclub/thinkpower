@@ -1,9 +1,12 @@
 CXX ?= g++
 
 # Base Architecture & Native SIMD Flags for AMD Ryzen (Zen 2 Renoir)
+MARCH ?= native
+MTUNE ?= native
+
 NATIVE_SIMD_FLAGS = -O3 \
-                    -march=native \
-                    -mtune=native \
+                    -march=$(MARCH) \
+                    -mtune=$(MTUNE) \
                     -mavx2 \
                     -mfma \
                     -mbmi2 \
@@ -68,16 +71,24 @@ pkg:
 	@echo "==> Building native Arch/CachyOS package with makepkg..."
 	makepkg -f --nodeps
 
-release: pgo pkg
+deb: $(TARGET)
+	@echo "==> Building Debian/Ubuntu .deb package..."
+	@./packaging/build-deb.sh 1.0.0 amd64
+
+release: pgo pkg deb
 	@echo "==> Packaging standalone universal distribution tarball..."
 	@mkdir -p release/thinkpower-1.0.0
 	@cp -a bin src packaging install.sh uninstall.sh LICENSE README.md Makefile CMakeLists.txt release/thinkpower-1.0.0/
 	@tar -czf release/thinkpower-1.0.0-linux-x86_64.tar.gz -C release thinkpower-1.0.0
 	@rm -rf release/thinkpower-1.0.0
+	@mv -f thinkpower-*.pkg.tar.zst release/ 2>/dev/null || true
+	@cd release && sha256sum thinkpower* > SHA256SUMS.txt
 	@echo "========================================================="
-	@echo "  🎁 Release Artifacts Generated in $(CURDIR):"
-	@echo "    - Arch/CachyOS Package : thinkpower-1.0.0-1-x86_64.pkg.tar.zst"
+	@echo "  🎁 Release Artifacts Generated in $(CURDIR)/release:"
+	@echo "    - Arch/CachyOS Package : release/thinkpower-1.0.0-1-x86_64.pkg.tar.zst"
+	@echo "    - Debian/Ubuntu Package: release/thinkpower_1.0.0_amd64.deb"
 	@echo "    - Standalone Tarball   : release/thinkpower-1.0.0-linux-x86_64.tar.gz"
+	@echo "    - SHA256 Checksums     : release/SHA256SUMS.txt"
 	@echo "========================================================="
 
 install: $(TARGET)
@@ -85,4 +96,4 @@ install: $(TARGET)
 	install -m 755 $(TARGET) $(DESTDIR)/usr/local/bin/power-tray
 	install -m 755 src/power-profile-manager $(DESTDIR)/usr/local/bin/power-profile-manager
 
-.PHONY: all clean install pgo pkg release
+.PHONY: all clean install pgo pkg deb release
