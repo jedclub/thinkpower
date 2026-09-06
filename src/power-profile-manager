@@ -88,6 +88,14 @@ restore_common_hardware() {
     # VM 및 디스크 플러시 주기 원복
     echo 0 > /proc/sys/vm/laptop_mode 2>/dev/null || true
     echo 500 > /proc/sys/vm/dirty_writeback_centisecs 2>/dev/null || true
+    echo 150 > /proc/sys/vm/swappiness 2>/dev/null || true
+    [ -w /sys/kernel/mm/transparent_hugepage/enabled ] && echo always > /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || true
+    # CPU Idle 거버너 및 타이머 원복
+    [ -w /sys/devices/system/cpu/cpuidle/current_governor ] && echo menu > /sys/devices/system/cpu/cpuidle/current_governor 2>/dev/null || true
+    for p in /sys/devices/system/cpu/cpu*/cpuidle/state0/disable; do
+        [ -w "$p" ] && echo 0 > "$p" 2>/dev/null || true
+    done
+    [ -w /proc/sys/kernel/timer_migration ] && echo 1 > /proc/sys/kernel/timer_migration 2>/dev/null || true
     # PCIe ASPM 정책 원복
     echo default > /sys/module/pcie_aspm/parameters/policy 2>/dev/null || true
     # 오디오 슬립 원복 (10초)
@@ -188,6 +196,7 @@ restore_common_hardware() {
 set_performance() {
     echo "▶ [성능 모드] 적용 중..."
     restore_common_hardware
+    update_state_file "performance"
 
     # 1. CPU
     [ -w /sys/devices/system/cpu/cpufreq/boost ] && echo 1 > /sys/devices/system/cpu/cpufreq/boost
@@ -204,13 +213,12 @@ set_performance() {
         powerprofilesctl set performance >/dev/null 2>&1 || true
         run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-performance-symbolic -t 3000 "전원 프로파일: [성능]" "CPU 부스트(4.1GHz) 활성화, 최대 성능"
     fi
-
-    update_state_file "performance"
 }
 
 set_balanced() {
     echo "▶ [균형 모드] 적용 중..."
     restore_common_hardware
+    update_state_file "balanced"
 
     # 1. CPU
     [ -w /sys/devices/system/cpu/cpufreq/boost ] && echo 1 > /sys/devices/system/cpu/cpufreq/boost
@@ -229,13 +237,12 @@ set_balanced() {
         powerprofilesctl set balanced >/dev/null 2>&1 || true
         run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-balanced-symbolic -t 3000 "전원 프로파일: [균형]" "표준 동적 클럭 및 전력 관리"
     fi
-
-    update_state_file "balanced"
 }
 
 set_save() {
     echo "▶ [스마트 절전 모드] 적용 중 (와이파이/BT/장치 100% 정상 작동)..."
     restore_common_hardware
+    update_state_file "save"
 
     # 1. CPU: 1.7GHz 상한 (부스트만 OFF, 8코어 16스레드 유지, schedutil 반응성 유지)
     [ -w /sys/devices/system/cpu/cpufreq/boost ] && echo 0 > /sys/devices/system/cpu/cpufreq/boost
@@ -255,13 +262,12 @@ set_save() {
         powerprofilesctl set power-saver >/dev/null 2>&1 || true
         run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-powersave-symbolic -t 3000 "전원 프로파일: [스마트 절전]" "부스트 OFF(1.7GHz 상한) 및 발열 억제\n(Wi-Fi, 블루투스, 16스레드 100% 유지)"
     fi
-
-    update_state_file "save"
 }
 
 set_ultra() {
     echo "▶ [초절전 모드] 안전 적용 중 (16스레드 유지, CPU 1.4GHz, GPU 50% 제한, 터보 부스트 OFF)..."
     restore_common_hardware
+    update_state_file "ultra"
 
     # 1. CPU: 16스레드 전체 유지! 부스트 OFF, 하드웨어 최저 P-State(1.4GHz) 상한, schedutil 거버너
     [ -w /sys/devices/system/cpu/cpufreq/boost ] && echo 0 > /sys/devices/system/cpu/cpufreq/boost
@@ -328,7 +334,16 @@ set_ultra() {
     # 7. 디스크 I/O Flush 지연 (15초, NVMe SSD APST 딥슬립 유지 극대화)
     [ -w /proc/sys/vm/dirty_writeback_centisecs ] && echo 1500 > /proc/sys/vm/dirty_writeback_centisecs 2>/dev/null || true
 
-    # 8. KDE Plasma 안전 최적화 (24FPS 차단/블러 언로드 금지! 60Hz 화면 주사율 100% 유지)
+    # 8. CPU Idle(teo 거버너, POLL 비활성화, 타이머 마이그레이션 차단) 및 RAM 딥슬립(THP madvise, Swappiness 60)
+    [ -w /sys/devices/system/cpu/cpuidle/current_governor ] && echo teo > /sys/devices/system/cpu/cpuidle/current_governor 2>/dev/null || true
+    for p in /sys/devices/system/cpu/cpu*/cpuidle/state0/disable; do
+        [ -w "$p" ] && echo 1 > "$p" 2>/dev/null || true
+    done
+    [ -w /proc/sys/kernel/timer_migration ] && echo 0 > /proc/sys/kernel/timer_migration 2>/dev/null || true
+    [ -w /sys/kernel/mm/transparent_hugepage/enabled ] && echo madvise > /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || true
+    [ -w /proc/sys/vm/swappiness ] && echo 60 > /proc/sys/vm/swappiness 2>/dev/null || true
+
+    # 9. KDE Plasma 안전 최적화 (24FPS 차단/블러 언로드 금지! 60Hz 화면 주사율 100% 유지)
     local cur_anim
     cur_anim=$(run_as_user kreadconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor 2>/dev/null || echo "0.25")
     [ -n "$cur_anim" ] && echo "$cur_anim" > "$KDE_ANIM_BACKUP"
@@ -339,17 +354,15 @@ set_ultra() {
     # Baloo 백그라운드 파일 색인 중단 (유휴 디스크/CPU 웨이크업 방지)
     run_as_user balooctl6 suspend 2>/dev/null || true
 
-    # 9. PCIe Runtime PM
+    # 10. PCIe Runtime PM
     command -v powertop >/dev/null 2>&1 && powertop --auto-tune >/dev/null 2>&1 || true
 
-    update_state_file "ultra"
-
-    # 10. PPD 및 알림
+    # 11. PPD 및 알림
     if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
         powerprofilesctl set power-saver >/dev/null 2>&1 || true
         run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-powersave-symbolic -t 4000 \
             "전원 프로파일: [초절전]" \
-            "CPU 1.4GHz | 화면 20% | 키보드 OFF | GPU 50% | PCIe/디스크 절전\n(※ 16스레드 및 60Hz 정상 가동)"
+            "CPU 1.4GHz+teo | RAM/THP 절전 | 화면 20% | 키보드 OFF | GPU 50%\n(※ 16스레드 및 60Hz 정상 가동)"
     fi
 }
 
@@ -397,6 +410,9 @@ show_status() {
     echo "  - 커널 랩톱 모드  : $VM_LM (5=디스크I/O 극한 버퍼링)"
     echo "  - 키보드 백라이트 : $KBD (0=소등)"
     echo "  - Wi-Fi / BT      : 항상 정상 가동 (연결 유지)"
+    IDLE_GOV=$(cat /sys/devices/system/cpu/cpuidle/current_governor 2>/dev/null || echo "?")
+    THP=$(cat /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null | grep -o '\[.*\]' | tr -d '[]' || echo "?")
+    SWAP_VAL=$(cat /proc/sys/vm/swappiness 2>/dev/null || echo "?")
     BAT_STATUS=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null || echo "Unknown")
     if [ "$BAT_STATUS" = "Charging" ]; then
         echo "  - 현재 충전량 (+): +${POWER_W}W (어댑터 충전 중)"
@@ -405,6 +421,8 @@ show_status() {
     else
         echo "  - 현재 사용량 (-): -${POWER_W}W (배터리 사용 중)"
     fi
+    echo "  - CPU Idle 거버너 : $IDLE_GOV"
+    echo "  - RAM THP/스왑니스: $THP / swappiness $SWAP_VAL"
     echo "=========================================="
 }
 
