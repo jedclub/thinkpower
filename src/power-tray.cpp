@@ -887,6 +887,14 @@ void PowerTrayApp::on_dbus_signal(const std::string &new_os_profile) {
         return;
     }
 
+    // Refresh current mode from state file in case CLI (power-profile-manager) altered it
+    current_mode = get_current_mode();
+
+    // If current mode already aligns with the requested OS profile, do nothing
+    if (new_os_profile == "performance" && current_mode == "performance") return;
+    if (new_os_profile == "balanced" && current_mode == "balanced") return;
+    if (new_os_profile == "power-saver" && (current_mode == "save" || current_mode == "ultra")) return;
+
     gint64 now = g_get_monotonic_time();
 
     // 1. User manual selection lock (60 seconds)
