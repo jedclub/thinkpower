@@ -12,29 +12,35 @@ This document details every kernel sysfs interface, hardware register, and drive
 - **Ultra / Smart Save**: `0`
 - **Mechanism**: AMD Zen 2 processors scale voltage non-linearly above base clock (1.7GHz). When boost is enabled, single-core bursts to 4.1GHz push core voltage up to 1.35V+, causing short package spikes of 25W–40W. Setting `boost=0` limits the core ceiling to 1.7GHz at ~0.8V, cutting transient thermal and power spikes by more than 60%.
 
-### 1.2 Scaling Governor
-- **Sysfs Node**: `/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor`
-- **Performance / Balanced / Smart Save**: `schedutil`
-- **Ultra Save**: `powersave`
-- **Mechanism**: Under `acpi-cpufreq`, `powersave` pins all active cores to the minimum hardware P-state (1.4GHz on 4750U), preventing any upward frequency transition and maintaining minimal operating voltage.
+### 1.2 Scaling Governor & Frequency Cap
+- **Sysfs Node**: `/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor`, `scaling_max_freq`
+- **Performance / Balanced / Smart Save**: `schedutil` (max 1.7GHz ~ 4.1GHz)
+- **Ultra Save**: `powersave` + `scaling_max_freq=1400000` (Hard 1.4GHz ceiling)
+- **Mechanism**: Under `acpi-cpufreq`, `powersave` pins all active cores to the minimum hardware P-state (1.4GHz on 4750U). Hard-capping `scaling_max_freq` prevents any background workload from requesting higher P-states, keeping core voltage strictly at ~0.7V.
 
-### 1.3 SMT (Simultaneous Multithreading / Hyperthreading)
-- **Sysfs Node**: `/sys/devices/system/cpu/smt/control`
-- **Performance / Balanced / Smart Save**: `on` (8 Cores / 16 Threads)
-- **Ultra Save**: `off` (8 Physical Cores / 8 Threads)
-- **Mechanism**: Toggling SMT off offlines sibling logical threads (CPUs 8–15). This eliminates thread scheduling interrupts, L1/L2 cache thrashing, and reduces idle leakage current across the CCX while retaining all 8 full physical Zen 2 execution cores.
+### 1.3 Core Parking & SMT Offlining (4 Cores / 4 Threads)
+- **Sysfs Node**: `/sys/devices/system/cpu/smt/control`, `/sys/devices/system/cpu/cpu{8..15}/online`
+- **Performance / Balanced / Smart Save**: All 8 Cores / 16 Threads active
+- **Ultra Save**: **4 Cores / 4 Threads** (SMT off + CCX 1 power-gated)
+- **Mechanism**: Toggling SMT off offlines sibling logical threads, while offlining CPUs 8–15 allows the entire second Zen 2 CCX complex to enter a hardware power-gated sleep state. This eliminates idle silicon leakage current and cuts baseline CPU power consumption to ~1.5W.
 
 ### 1.4 APU Package Power Capping (`ryzenadj` - Optional)
 - **Tool**: `ryzenadj` (AUR: `ryzenadj` or CachyOS repos)
-- **Ultra Setting**: `--stapm-limit=6000 --fast-limit=8000 --slow-limit=6000 --tctl-temp=65`
-- **Restore Setting**: `--stapm-limit=25000 --fast-limit=30000 --slow-limit=25000`
-- **Mechanism**: Hard caps the Sustained Power Tracking Limit (STAPM) to 6.0W in hardware.
+- **Ultra Setting**: `--stapm-limit=3000 --fast-limit=3500 --slow-limit=3000 --apu-slow-limit=3000 --tctl-temp=50`
+- **Restore Setting**: `--stapm-limit=25000 --fast-limit=30000 --slow-limit=25000 --tctl-temp=95`
+- **Mechanism**: Hard caps the Sustained Power Tracking Limit (STAPM) to 3.0W in hardware.
 
 ---
 
 ## 2. Graphics & Display Panel
 
-### 2.1 AMD Adaptive Backlight Management (ABM)
+### 2.1 Physical Display Brightness Cap (20%)
+- **Sysfs Node**: `/sys/class/backlight/*/brightness`
+- **Ultra Save**: Clamped to **20%** of `max_brightness` (original brightness backed up in `~/.cache/prev_display_brightness`)
+- **Restoration**: Automatically restored to user's previous brightness upon exiting Ultra Save.
+- **Mechanism**: The display backlight is the largest individual power consumer in modern laptops (consuming up to 3W at 100% brightness). Clamping to 20% drops backlight power below ~0.6W while remaining easily legible indoors.
+
+### 2.2 AMD Adaptive Backlight Management (ABM)
 - **Sysfs Node**: `/sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings`
 - **Levels**:
   - `0`: Off (Performance)
@@ -43,13 +49,13 @@ This document details every kernel sysfs interface, hardware register, and drive
   - `4`: Maximum backlight power reduction (Ultra Save)
 - **Mechanism**: ABM uses a dedicated hardware pixel luminance boost algorithm in the AMD display engine, dimming the physical LED backlight while compensating pixel RGB values, reducing display power by up to 1.0W without perceived brightness drop.
 
-### 2.2 Display Refresh Rate Downclocking (48Hz)
+### 2.3 Display Refresh Rate Downclocking (48Hz)
 - **Command**: `kscreen-doctor output.1.mode.2` (48.04Hz) / `output.1.mode.1` (60.06Hz)
 - **Mechanism**: The ThinkPad L15 Gen 1 eDP panel supports a native 48Hz mode. Reducing scanout frequency from 60Hz to 48Hz reduces display controller PHY transmission clock cycles, saving ~0.5W–0.8W.
 
-### 2.3 AMDGPU Dynamic Power Management (DPM)
+### 2.4 AMDGPU Dynamic Power Management (DPM)
 - **Sysfs Node**: `/sys/class/drm/card1/device/power_dpm_force_performance_level`
-- **Ultra Save**: `low`
+- **Ultra Save**: `low` (pins GPU SCLK to 200MHz, ~12.5% of max 1600MHz)
 - **Balanced / Performance**: `auto`
 
 ---

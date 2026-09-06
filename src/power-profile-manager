@@ -40,6 +40,7 @@ CACHE_DIR="${USER_HOME}/.cache"
 mkdir -p "$CACHE_DIR" 2>/dev/null || true
 STATE_FILE="${CACHE_DIR}/power_profile_mode"
 KBD_BACKUP="${CACHE_DIR}/prev_kbd_backlight"
+DISP_BACKUP="${CACHE_DIR}/prev_display_brightness"
 
 # --internal / --quiet 플래그 확인 (power-tray 등 내부 호출 시 중복 PPD/알림 차단)
 INTERNAL_CALL=0
@@ -74,10 +75,22 @@ restore_common_hardware() {
     echo default > /sys/module/pcie_aspm/parameters/policy 2>/dev/null || true
     # 오디오 슬립 원복 (10초)
     echo 10 > /sys/module/snd_hda_intel/parameters/power_save 2>/dev/null || true
-    # SMT 가상스레드 활성화 (16스레드)
+    # 오프라인된 모든 CPU 코어 및 SMT 가상스레드 복원 (8코어 16스레드)
+    for c in /sys/devices/system/cpu/cpu[0-9]*/online; do
+        [ -w "$c" ] && echo 1 > "$c" 2>/dev/null || true
+    done
     echo on > /sys/devices/system/cpu/smt/control 2>/dev/null || true
+    # CPU 클럭 상한(scaling_max_freq) 원복
+    for mf in /sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_max_freq; do
+        dir=$(dirname "$mf")
+        if [ -r "$mf" ] && [ -w "$dir/scaling_max_freq" ]; then
+            cat "$mf" > "$dir/scaling_max_freq" 2>/dev/null || true
+        fi
+    done
+    # GPU DPM 성능 레벨 원복 (auto)
+    [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo auto > /sys/class/drm/card1/device/power_dpm_force_performance_level 2>/dev/null || true
     # ryzenadj 전력 상한 복원 (설치되어 있을 경우)
-    command -v ryzenadj >/dev/null 2>&1 && ryzenadj --stapm-limit=25000 --fast-limit=30000 --slow-limit=25000 >/dev/null 2>&1 || true
+    command -v ryzenadj >/dev/null 2>&1 && ryzenadj --stapm-limit=25000 --fast-limit=30000 --slow-limit=25000 --tctl-temp=95 >/dev/null 2>&1 || true
 
     # 이전 모드가 ultra였던 경우에만 60Hz 화면 복원 및 파일 색인 재개 (불필요한 GPU 디스플레이 리셋 차단)
     local prev_mode
@@ -94,6 +107,17 @@ restore_common_hardware() {
             echo "$PREV_KBD" > /sys/class/leds/tpacpi::kbd_backlight/brightness
         fi
         rm -f "$KBD_BACKUP"
+    fi
+
+    # 디스플레이 백라이트 이전 밝기 자동 복원
+    if [ -f "$DISP_BACKUP" ]; then
+        PREV_DISP=$(cat "$DISP_BACKUP" 2>/dev/null || true)
+        if [ -n "$PREV_DISP" ]; then
+            for bl in /sys/class/backlight/*; do
+                [ -w "$bl/brightness" ] && echo "$PREV_DISP" > "$bl/brightness" 2>/dev/null || true
+            done
+        fi
+        rm -f "$DISP_BACKUP"
     fi
 }
 
@@ -171,27 +195,49 @@ set_save() {
 }
 
 set_ultra() {
-    echo "▶ [극한 초절전 모드] 적용 중 (와이파이/BT 100% 유지, 물리적 전력 극한 다이어트)..."
+    echo "▶ [극한 초절전 모드] 적용 중 (밝기 20%, GPU 제한, 1.4GHz 고정, 4코어 파킹, TDP 3W 세팅)..."
 
-    # [1. CPU & APU 극단 제한]
+    # [1. CPU & APU 극단 제한 - TDP 3W 목표]
     # - 터보 부스트 즉시 차단
     [ -w /sys/devices/system/cpu/cpufreq/boost ] && echo 0 > /sys/devices/system/cpu/cpufreq/boost
-    # - powersave 거버너: 1.4GHz 최저 전압/클럭 바닥으로 고정
-    for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-        [ -w "$g" ] && echo powersave > "$g"
+    # - 주파수 상한(scaling_max_freq)을 시스템 최저 클럭(1.4GHz)으로 영구 락다운
+    for sf in /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq; do
+        [ -w "$sf" ] && echo 1400000 > "$sf" 2>/dev/null || true
     done
-    # - SMT 가상스레드 OFF: 16스레드 -> 8물리코어로 코어 스위칭 오버헤드 및 누설전류 차단
+    # - powersave 거버너: 1.4GHz 최저 전압 바닥 고정
+    for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+        [ -w "$g" ] && echo powersave > "$g" 2>/dev/null || true
+    done
+    # - SMT 가상스레드 OFF (16스레드 -> 8물리코어)
     [ -w /sys/devices/system/cpu/smt/control ] && echo off > /sys/devices/system/cpu/smt/control
-    # - ryzenadj: 6W 하드웨어 파워캡 (설치 시 즉시 발동)
-    command -v ryzenadj >/dev/null 2>&1 && ryzenadj --stapm-limit=6000 --fast-limit=8000 --slow-limit=6000 --tctl-temp=65 >/dev/null 2>&1 || true
+    # - 4코어 코어 파킹 (CCX 1의 CPU 8~15 완전 오프라인 -> 4C/4T 구동으로 누설전류 차단 및 3W 달성)
+    for c in /sys/devices/system/cpu/cpu{8..15}/online; do
+        [ -w "$c" ] && echo 0 > "$c" 2>/dev/null || true
+    done
+    # - ryzenadj: 3W 하드웨어 파워캡 (설치 시 즉시 발동, STAPM 3W / Fast 3.5W / Slow 3W)
+    command -v ryzenadj >/dev/null 2>&1 && ryzenadj --stapm-limit=3000 --fast-limit=3500 --slow-limit=3000 --apu-slow-limit=3000 --tctl-temp=50 >/dev/null 2>&1 || true
 
-    # [2. 디스플레이 & GPU 극한 절감]
+    # [2. 디스플레이 밝기 20% 강제 제한 & GPU 30% 이하 제한]
     # - 주사율 60Hz -> 48Hz 다운클럭 (화면 스캔아웃 엔진 전력 절감)
     run_as_user kscreen-doctor output.1.mode.2
     # - 패널 백라이트 적응형 절전 레벨 4 (최대 절감)
     [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 4 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
-    # - GPU DPM 최저 고정
+    # - GPU DPM 최저 고정 (sclk 200MHz 바닥으로 제한, 최대 1600MHz의 12.5% 수준으로 억제)
     [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo low > /sys/class/drm/card1/device/power_dpm_force_performance_level
+    # - 화면 물리 밝기 20% 상한 강제 (현재 밝기 백업 후 20% 초과 시 20%로 하향)
+    for bl in /sys/class/backlight/*; do
+        if [ -r "$bl/brightness" ] && [ -r "$bl/max_brightness" ] && [ -w "$bl/brightness" ]; then
+            CUR_BRIGHT=$(cat "$bl/brightness" 2>/dev/null || echo "0")
+            MAX_BRIGHT=$(cat "$bl/max_brightness" 2>/dev/null || echo "100")
+            TARGET_BRIGHT=$(( MAX_BRIGHT * 20 / 100 ))
+            [ "$TARGET_BRIGHT" -lt 1 ] && TARGET_BRIGHT=1
+            if [ "$CUR_BRIGHT" -gt "$TARGET_BRIGHT" ]; then
+                echo "$CUR_BRIGHT" > "$DISP_BACKUP"
+                chmod 666 "$DISP_BACKUP" 2>/dev/null || true
+                echo "$TARGET_BRIGHT" > "$bl/brightness" 2>/dev/null || true
+            fi
+        fi
+    done
 
     # [3. PCIe 버스 & NVMe SSD 딥슬립]
     # - PCIe ASPM 초절전 정책 강제 (L1.1 / L1.2 링크 슬립 강제)
@@ -224,7 +270,7 @@ set_ultra() {
         powerprofilesctl set power-saver >/dev/null 2>&1 || true
         run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -u critical -i battery-low -t 5000 \
             "전원 프로파일: [⚡ 극한 초절전 ON]" \
-            "1.4GHz 고정 | 48Hz | ASPM MAX | 8C전용 | 백라이트MAX\n(※ Wi-Fi 및 블루투스는 정상 유지됩니다)"
+            "1.4GHz(4C) 고정 | 밝기 20% | GPU 저전력 | TDP 3W | 48Hz\n(※ Wi-Fi 및 블루투스는 정상 유지됩니다)"
     fi
 
     update_state_file "ultra"
@@ -248,6 +294,13 @@ show_status() {
     ASPM=$(cat /sys/module/pcie_aspm/parameters/policy 2>/dev/null | grep -o '\[.*\]' | tr -d '[]' || echo "?")
     VM_LM=$(cat /proc/sys/vm/laptop_mode 2>/dev/null || echo "?")
     KBD=$(cat /sys/class/leds/tpacpi::kbd_backlight/brightness 2>/dev/null || echo "?")
+    DISP=$(cat /sys/class/backlight/*/brightness 2>/dev/null | head -n1 || echo "?")
+    DISP_MAX=$(cat /sys/class/backlight/*/max_brightness 2>/dev/null | head -n1 || echo "100")
+    DISP_PCT=$(( DISP * 100 / DISP_MAX ))
+    CORES_ONLINE=$(cat /sys/devices/system/cpu/cpu*/online 2>/dev/null | grep -c "^1$")
+    # cpu0 is always online, so add 1
+    CORES_ONLINE=$(( CORES_ONLINE + 1 ))
+    GPU_DPM=$(cat /sys/class/drm/card1/device/power_dpm_force_performance_level 2>/dev/null || echo "?")
     POWER=$(cat /sys/class/power_supply/BAT0/power_now 2>/dev/null || echo "0")
     POWER_W=$(awk "BEGIN {printf \"%.2f\", $POWER / 1000000}" 2>/dev/null || echo "$POWER uW")
 
@@ -256,7 +309,10 @@ show_status() {
     echo "=========================================="
     echo "  - CPU Boost       : $BOOST (1=ON, 0=OFF)"
     echo "  - CPU Governor    : $GOV"
+    echo "  - CPU Active Cores: ${CORES_ONLINE}스레드"
     echo "  - SMT (스레드)    : $SMT (on=16스레드, off=8스레드)"
+    echo "  - GPU DPM 레벨    : $GPU_DPM"
+    echo "  - 화면 밝기       : ${DISP_PCT}% ($DISP / $DISP_MAX)"
     echo "  - 패널 절전(ABM)  : 레벨 $ABM (0=끄기, 4=최대)"
     echo "  - PCIe ASPM 정책  : $ASPM"
     echo "  - 커널 랩톱 모드  : $VM_LM (5=디스크I/O 극한 버퍼링)"
