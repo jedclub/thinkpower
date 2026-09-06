@@ -318,6 +318,17 @@ sudo pacman -R thinkpower
 
 ---
 
+## 📚 Technical Documentation & Deep Research
+
+For developers, power users, and engineers looking to achieve extreme power savings on Linux:
+- 🔬 **[05-EXTREME-POWER-SAVING-GUIDE.md](docs/05-EXTREME-POWER-SAVING-GUIDE.md)** — **[Deep Research] Comprehensive Engineering Guide to Sub-7W Linux Laptop Power Optimization (AMD SMU, VRM Phase Shedding, ASPM L1.2, ABM, and C-States)**.
+- 🏛️ [01-ARCHITECTURE.md](docs/01-ARCHITECTURE.md) — Dual-layer state machine, D-Bus synchronization, and Failsafe architecture.
+- ⚙️ [02-HARDWARE-TUNING.md](docs/02-HARDWARE-TUNING.md) — Sysfs registers, kernel parameters, and hardware tuning references.
+- 📖 [03-FEATURES-GUIDE.md](docs/03-FEATURES-GUIDE.md) — Complete features and CLI user guide.
+- 🩺 [04-TROUBLESHOOTING.md](docs/04-TROUBLESHOOTING.md) — Troubleshooting, permissions, and debugging tips.
+
+---
+
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
