@@ -97,11 +97,13 @@ struct PeripheralInfo {
 struct BatteryInfo {
     int capacity = 0;
     std::string status = "Unknown";
+    bool ac_online = false;
+    int charge_start = 0;
+    int charge_limit = 100;
     double power_w = 0.0;
     std::string time_str;
     int cycle_count = 0;
     double health_pct = 100.0;
-    int charge_limit = 100;
     std::string protect_str = "100% (일반)";
     std::vector<PeripheralInfo> peripherals;
 };
@@ -317,6 +319,12 @@ BatteryInfo PowerTrayApp::get_battery_info() {
         long energy_full_design = read_long("energy_full_design", 0);
         info.cycle_count = static_cast<int>(read_long("cycle_count", 0));
 
+        long start_limit = read_long("charge_control_start_threshold", 0);
+        if (start_limit <= 0) {
+            start_limit = read_long("charge_start_threshold", 0);
+        }
+        info.charge_start = static_cast<int>(start_limit);
+
         long charge_limit = read_long("charge_control_end_threshold", 0);
         if (charge_limit <= 0) {
             charge_limit = read_long("charge_stop_threshold", 100);
@@ -357,6 +365,18 @@ BatteryInfo PowerTrayApp::get_battery_info() {
                 }
             }
         }
+    }
+
+    char ac_buf[32];
+    if (fast_read_sysfs("/sys/class/power_supply/AC/online", ac_buf, sizeof(ac_buf))) {
+        info.ac_online = (ac_buf[0] == '1');
+    } else if (fast_read_sysfs("/sys/class/power_supply/ACAD/online", ac_buf, sizeof(ac_buf))) {
+        info.ac_online = (ac_buf[0] == '1');
+    } else if (fast_read_sysfs("/sys/class/power_supply/ucsi-source-psy-USBC000:002/online", ac_buf, sizeof(ac_buf))) {
+        info.ac_online = (ac_buf[0] == '1');
+    }
+    if (info.status == "Charging") {
+        info.ac_online = true;
     }
 
     if (info.charge_limit < 100) {
@@ -463,12 +483,15 @@ void PowerTrayApp::update_icon_label_and_tooltip(const std::string &mode, const 
     const std::string &status = bat.status;
     double power_w = bat.power_w;
     int charge_limit = bat.charge_limit;
+    bool is_ac = bat.ac_online;
 
-    // 1. 작업표시줄 라벨 (충전 +, 방전 -)
+    // 1. 작업표시줄 라벨 (충전 +, 대기 🔌, 방전 -)
     std::ostringstream oss_lbl;
     if (status == "Charging") {
         oss_lbl << std::fixed << std::setprecision(1) << " ⚡ " << cap << "% (+" << power_w << "W)";
     } else if (status == "Full" || (status == "Not charging" && cap >= charge_limit)) {
+        oss_lbl << " 🔌 " << cap << "% (완료)";
+    } else if (is_ac || status == "Not charging") {
         oss_lbl << " 🔌 " << cap << "% (대기)";
     } else {
         oss_lbl << std::fixed << std::setprecision(1) << " " << cap << "% (-" << power_w << "W)";
@@ -482,15 +505,32 @@ void PowerTrayApp::update_icon_label_and_tooltip(const std::string &mode, const 
     else if (mode == "save" || mode == "ultra") p_name = "powersave";
 
     char icon_buf[128];
-    if (status == "Charging") {
+    if (status == "Charging" || ((is_ac || status == "Not charging") && status != "Discharging")) {
         snprintf(icon_buf, sizeof(icon_buf), "battery-%03d-charging-profile-%s", pct_10, p_name.c_str());
     } else {
         snprintf(icon_buf, sizeof(icon_buf), "battery-%03d-profile-%s", pct_10, p_name.c_str());
     }
     app_indicator_set_icon_full(indicator, icon_buf, (std::to_string(cap) + "% - " + mode).c_str());
 
-    // 3. 툴팁 설정 (워드랩 원천 차단: 타이틀 1줄 컴팩트 유지)
-    std::string status_ko = (status == "Charging") ? "충전 중" : ((status == "Discharging") ? "배터리 사용" : "충전 완료");
+    // 3. 툴팁 설정 (상태 한글화 및 정확한 대기/완료 구분)
+    std::string status_ko;
+    if (status == "Charging") {
+        status_ko = "충전 중";
+    } else if (status == "Full") {
+        status_ko = "완충 (100%)";
+    } else if (status == "Not charging") {
+        if (cap >= charge_limit) {
+            status_ko = "충전 완료 (" + std::to_string(charge_limit) + "% 보호 한도)";
+        } else if (bat.charge_start > 0 && cap >= bat.charge_start) {
+            status_ko = "충전 대기 (" + std::to_string(bat.charge_start) + "% 이하 재개)";
+        } else {
+            status_ko = "충전 대기 (전원 연결됨)";
+        }
+    } else if (status == "Discharging") {
+        status_ko = "배터리 사용";
+    } else {
+        status_ko = is_ac ? "충전 대기 (전원 연결됨)" : "배터리 사용";
+    }
     std::string tooltip_title = "배터리 " + std::to_string(cap) + "% (" + status_ko + ")";
 
     std::map<std::string, std::string> mode_titles = {
@@ -512,7 +552,9 @@ void PowerTrayApp::update_icon_label_and_tooltip(const std::string &mode, const 
             time_line = "⏳ 충전예상 : " + bat.time_str;
         }
     } else if (status == "Full" || (status == "Not charging" && cap >= charge_limit)) {
-        power_line = "🔌 전원 : 어댑터 직결 (" + std::to_string(charge_limit) + "% 대기)";
+        power_line = "🔌 전원 : 어댑터 직결 (" + std::to_string(charge_limit) + "% 보호 한도 유지)";
+    } else if (is_ac || status == "Not charging") {
+        power_line = "🔌 전원 : 어댑터 연결됨 (충전 대기 중)";
     } else {
         std::ostringstream ss;
         ss << std::fixed << std::setprecision(1) << "⚡ 사용량 : -" << power_w << "W";
@@ -564,7 +606,25 @@ void PowerTrayApp::update_state_ui() {
 
     update_icon_label_and_tooltip(mode, bat);
 
-    std::string status_ko = (bat.status == "Charging") ? "충전 중" : ((bat.status == "Discharging") ? "배터리 사용 중" : "충전 완료/대기");
+    std::string status_ko;
+    if (bat.status == "Charging") {
+        status_ko = "충전 중";
+    } else if (bat.status == "Full") {
+        status_ko = "완충 (100%)";
+    } else if (bat.status == "Not charging") {
+        if (bat.capacity >= bat.charge_limit) {
+            status_ko = "충전 완료 (" + std::to_string(bat.charge_limit) + "% 보호 한도)";
+        } else if (bat.charge_start > 0 && bat.capacity >= bat.charge_start) {
+            status_ko = "충전 대기 (" + std::to_string(bat.charge_start) + "% 이하 재개)";
+        } else {
+            status_ko = "충전 대기 (전원 연결됨)";
+        }
+    } else if (bat.status == "Discharging") {
+        status_ko = "배터리 사용 중";
+    } else {
+        status_ko = bat.ac_online ? "충전 대기 (전원 연결됨)" : "배터리 사용 중";
+    }
+
     std::string time_txt = bat.time_str.empty() ? "" : (" (" + bat.time_str + ")");
     std::string bat_lbl = "🔋 배터리: " + std::to_string(bat.capacity) + "% - " + status_ko + time_txt;
     gtk_menu_item_set_label(GTK_MENU_ITEM(header_battery), bat_lbl.c_str());
@@ -574,7 +634,9 @@ void PowerTrayApp::update_state_ui() {
     if (bat.status == "Charging") {
         oss_pwr << "⚡ 현재 충전량: +" << bat.power_w << " W (어댑터 충전 중)";
     } else if (bat.status == "Full" || (bat.status == "Not charging" && bat.capacity >= bat.charge_limit)) {
-        oss_pwr << "🔌 외부 AC 전원 연결됨 (보호 한도 " << bat.charge_limit << "% 충전 대기)";
+        oss_pwr << "🔌 외부 AC 전원 연결됨 (보호 한도 " << bat.charge_limit << "% 유지 중)";
+    } else if (bat.ac_online || bat.status == "Not charging") {
+        oss_pwr << "🔌 외부 AC 전원 연결됨 (충전 대기 중)";
     } else {
         oss_pwr << "⚡ 현재 사용량: -" << bat.power_w << " W (배터리 사용 중)";
     }
