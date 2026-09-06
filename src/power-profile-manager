@@ -291,7 +291,38 @@ set_ultra() {
     # 패널 백라이트 적응형 절전 레벨 3 (색 왜곡 없이 디스플레이 전력 30% 절감)
     [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 3 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
 
-    # 4. KDE Plasma 안전 최적화 (24FPS 차단/블러 언로드 금지! 60Hz 화면 주사율 100% 유지)
+    # 4. 디스플레이 화면 밝기 20% 이하 제한 (이전 밝기 백업 후 20%로 하향)
+    for bl in /sys/class/backlight/*; do
+        if [ -w "$bl/brightness" ] && [ -r "$bl/max_brightness" ]; then
+            local max_b
+            max_b=$(cat "$bl/max_brightness" 2>/dev/null || echo "65535")
+            local cur_b
+            cur_b=$(cat "$bl/brightness" 2>/dev/null || echo "$max_b")
+            local target_20=$(( max_b * 20 / 100 ))
+
+            if [ ! -f "$DISP_BACKUP" ]; then
+                echo "$cur_b" > "$DISP_BACKUP"
+                chmod 666 "$DISP_BACKUP" 2>/dev/null || true
+            fi
+            if [ "$cur_b" -gt "$target_20" ]; then
+                echo "$target_20" > "$bl/brightness" 2>/dev/null || true
+            fi
+        fi
+    done
+
+    # 5. 키보드 백라이트 소등 (이전 켜짐 상태 백업 후 0으로 끄기)
+    local kbd_dev="/sys/class/leds/tpacpi::kbd_backlight/brightness"
+    if [ -w "$kbd_dev" ]; then
+        local cur_kbd
+        cur_kbd=$(cat "$kbd_dev" 2>/dev/null || echo "0")
+        if [ ! -f "$KBD_BACKUP" ] && [ "$cur_kbd" -gt 0 ]; then
+            echo "$cur_kbd" > "$KBD_BACKUP"
+            chmod 666 "$KBD_BACKUP" 2>/dev/null || true
+        fi
+        echo 0 > "$kbd_dev" 2>/dev/null || true
+    fi
+
+    # 6. KDE Plasma 안전 최적화 (24FPS 차단/블러 언로드 금지! 60Hz 화면 주사율 100% 유지)
     local cur_anim
     cur_anim=$(run_as_user kreadconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor 2>/dev/null || echo "0.25")
     [ -n "$cur_anim" ] && echo "$cur_anim" > "$KDE_ANIM_BACKUP"
@@ -302,15 +333,15 @@ set_ultra() {
     # Baloo 백그라운드 파일 색인 중단 (유휴 디스크/CPU 웨이크업 방지)
     run_as_user balooctl6 suspend 2>/dev/null || true
 
-    # 5. PCIe Runtime PM
+    # 7. PCIe Runtime PM
     command -v powertop >/dev/null 2>&1 && powertop --auto-tune >/dev/null 2>&1 || true
 
-    # 6. PPD 및 알림
+    # 8. PPD 및 알림
     if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
         powerprofilesctl set power-saver >/dev/null 2>&1 || true
         run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-powersave-symbolic -t 4000 \
             "전원 프로파일: [초절전]" \
-            "부스트 OFF (1.7GHz) | GPU 70% 상한 제어 | 16스레드 가동\n(※ 60Hz 화면 주사율 및 시각 효과 정상 유지)"
+            "화면 밝기 20% | 키보드 소등 | GPU 70% | 부스트 OFF\n(※ 16스레드 및 60Hz 화면 효과 정상 가동)"
     fi
 
     update_state_file "ultra"
