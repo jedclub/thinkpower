@@ -5,6 +5,7 @@ PartOf=graphical-session.target
 
 [Service]
 ExecStart=/usr/bin/power-tray
+ExecStop=/usr/bin/power-profile-manager restore
 Restart=always
 RestartSec=2
 

@@ -17,6 +17,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <dlfcn.h>
+#include <csignal>
 #include "l10n.hpp"
 
 #if defined(__AVX2__)
@@ -123,11 +124,12 @@ public:
     // D-Bus Signal Callback
     void on_dbus_signal(const std::string &new_os_profile);
 
+    std::string get_manager_bin();
+    std::string get_current_mode();
+
 private:
     std::string get_cache_dir();
     std::string get_state_file_path();
-    std::string get_manager_bin();
-    std::string get_current_mode();
     void set_current_mode(const std::string &mode);
 
     BatteryInfo get_battery_info();
@@ -196,6 +198,10 @@ PowerTrayApp::PowerTrayApp() {
 }
 
 PowerTrayApp::~PowerTrayApp() {
+    if (get_current_mode() == "ultra") {
+        std::string cmd = get_manager_bin() + " restore --internal >/dev/null 2>&1 &";
+        system(cmd.c_str());
+    }
     if (dbus_conn && dbus_sub_id > 0) {
         g_dbus_connection_signal_unsubscribe(dbus_conn, dbus_sub_id);
     }
@@ -1026,8 +1032,21 @@ static void run_pgo_training(size_t iterations) {
 }
 
 // ==============================================================================
-// Main Entrypoint
+// Main Entrypoint & Failsafe Signal Handling
 // ==============================================================================
+
+static PowerTrayApp *g_app_instance = nullptr;
+
+static void clean_exit_handler(int sig) {
+    (void)sig;
+    if (g_app_instance) {
+        if (g_app_instance->get_current_mode() == "ultra") {
+            std::string cmd = g_app_instance->get_manager_bin() + " restore --internal >/dev/null 2>&1 &";
+            system(cmd.c_str());
+        }
+    }
+    gtk_main_quit();
+}
 
 int main(int argc, char **argv) {
     setlocale(LC_ALL, "");
@@ -1041,6 +1060,11 @@ int main(int argc, char **argv) {
 
     gtk_init(&argc, &argv);
     PowerTrayApp app;
+    g_app_instance = &app;
+    signal(SIGINT, clean_exit_handler);
+    signal(SIGTERM, clean_exit_handler);
+
     app.run();
+    g_app_instance = nullptr;
     return 0;
 }

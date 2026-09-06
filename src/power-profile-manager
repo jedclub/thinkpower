@@ -70,6 +70,10 @@ else
 fi
 
 restore_common_hardware() {
+    local force_all="${1:-0}"
+    local prev_mode
+    prev_mode=$(cat "$STATE_FILE" 2>/dev/null || echo "balanced")
+
     # VM 및 디스크 플러시 주기 원복
     echo 0 > /proc/sys/vm/laptop_mode 2>/dev/null || true
     echo 500 > /proc/sys/vm/dirty_writeback_centisecs 2>/dev/null || true
@@ -77,11 +81,12 @@ restore_common_hardware() {
     echo default > /sys/module/pcie_aspm/parameters/policy 2>/dev/null || true
     # 오디오 슬립 원복 (10초)
     echo 10 > /sys/module/snd_hda_intel/parameters/power_save 2>/dev/null || true
-    # 오프라인된 모든 CPU 코어 및 SMT 가상스레드 복원 (8코어 16스레드)
+
+    # [1. CPU 완전 복구] 오프라인된 모든 CPU 코어 온라인 복원 및 SMT 가상스레드 복원 (8코어 16스레드)
+    echo on > /sys/devices/system/cpu/smt/control 2>/dev/null || true
     for c in /sys/devices/system/cpu/cpu[0-9]*/online; do
         [ -w "$c" ] && echo 1 > "$c" 2>/dev/null || true
     done
-    echo on > /sys/devices/system/cpu/smt/control 2>/dev/null || true
     # CPU 클럭 상한(scaling_max_freq) 원복
     for mf in /sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_max_freq; do
         dir=$(dirname "$mf")
@@ -89,57 +94,75 @@ restore_common_hardware() {
             cat "$mf" > "$dir/scaling_max_freq" 2>/dev/null || true
         fi
     done
-    # GPU DPM 성능 레벨 원복 (auto)
+
+    # [2. GPU 완전 복구] DPM 성능 레벨 원복 (auto)
     [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo auto > /sys/class/drm/card1/device/power_dpm_force_performance_level 2>/dev/null || true
     # ryzenadj 전력 상한 복원 (설치되어 있을 경우)
     command -v ryzenadj >/dev/null 2>&1 && ryzenadj --stapm-limit=25000 --fast-limit=30000 --slow-limit=25000 --tctl-temp=95 >/dev/null 2>&1 || true
 
-    # 이전 모드가 ultra였던 경우에만 60Hz 화면 복원 및 KDE Plasma 효과 복원
-    local prev_mode
-    prev_mode=$(cat "$STATE_FILE" 2>/dev/null || echo "balanced")
-    if [ "$prev_mode" = "ultra" ]; then
-        # 1. 60Hz 화면 복원 및 Baloo 파일 색인 재개
+    # [3. KDE Plasma & 디스플레이 완전 복구]
+    # 이전 모드가 ultra였거나 백업 파일이 존재하거나 강제 복구 모드인 경우 실행
+    if [ "$prev_mode" = "ultra" ] || [ -f "$KDE_ANIM_BACKUP" ] || [ "$force_all" -eq 1 ]; then
+        # 3-1. 60Hz 화면 주사율 복원 및 Baloo 파일 색인 재개
         run_as_user kscreen-doctor output.1.mode.1
         run_as_user balooctl6 resume
         
-        # 2. KWin 컴포지터 MaxFPS 제한 해제 및 애니메이션 속도 원복
+        # 3-2. KWin 컴포지터 MaxFPS 24 제한 해제 및 애니메이션 속도 원복
         run_as_user kwriteconfig6 --file kwinrc --group Compositing --key MaxFPS --delete
         run_as_user kwriteconfig6 --file kwinrc --group Compositing --key RefreshRate --delete
         run_as_user kwriteconfig6 --file kwinrc --group Compositing --key AnimationSpeed 3
         
-        # 3. 창 애니메이션 지속 시간 계수 복원
+        # 3-3. 창 애니메이션 지속 시간 계수 복원 (유효하지 않으면 안전 기본값 0.25)
         local prev_anim="0.25"
         if [ -f "$KDE_ANIM_BACKUP" ]; then
             prev_anim=$(cat "$KDE_ANIM_BACKUP" 2>/dev/null || echo "0.25")
+            # 숫자/소수점 검증
+            echo "$prev_anim" | grep -Eq '^[0-9]+(\.[0-9]+)?$' || prev_anim="0.25"
             rm -f "$KDE_ANIM_BACKUP"
         fi
         run_as_user kwriteconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor "$prev_anim"
         run_as_user qdbus6 org.kde.KWin /KWin reconfigure
         
-        # 4. KWin 블러 및 셰이더 효과 복원
+        # 3-4. KWin 블러 및 모든 셰이더 효과 완전 복원
         for eff in $KWIN_HEAVY_EFFECTS; do
             run_as_user qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect "$eff"
         done
     fi
 
-    # 키보드 백라이트 이전 상태 자동 복원
+    # [4. 키보드 백라이트 이전 상태 안전 복원]
     if [ -f "$KBD_BACKUP" ]; then
-        PREV_KBD=$(cat "$KBD_BACKUP" 2>/dev/null || echo "1")
-        if [ "$PREV_KBD" -gt 0 ] && [ -w /sys/class/leds/tpacpi::kbd_backlight/brightness ]; then
-            echo "$PREV_KBD" > /sys/class/leds/tpacpi::kbd_backlight/brightness
+        local prev_kbd
+        prev_kbd=$(cat "$KBD_BACKUP" 2>/dev/null || echo "1")
+        if echo "$prev_kbd" | grep -Eq '^[0-9]+$' && [ "$prev_kbd" -gt 0 ] && [ -w /sys/class/leds/tpacpi::kbd_backlight/brightness ]; then
+            echo "$prev_kbd" > /sys/class/leds/tpacpi::kbd_backlight/brightness
         fi
         rm -f "$KBD_BACKUP"
     fi
 
-    # 디스플레이 백라이트 이전 밝기 자동 복원
-    if [ -f "$DISP_BACKUP" ]; then
-        PREV_DISP=$(cat "$DISP_BACKUP" 2>/dev/null || true)
-        if [ -n "$PREV_DISP" ]; then
-            for bl in /sys/class/backlight/*; do
-                [ -w "$bl/brightness" ] && echo "$PREV_DISP" > "$bl/brightness" 2>/dev/null || true
-            done
-        fi
+    # [5. 디스플레이 화면 밝기 안전 복원]
+    if [ -f "$DISP_BACKUP" ] || [ "$force_all" -eq 1 ]; then
+        local prev_disp
+        prev_disp=$(cat "$DISP_BACKUP" 2>/dev/null || true)
         rm -f "$DISP_BACKUP"
+        for bl in /sys/class/backlight/*; do
+            if [ -w "$bl/brightness" ] && [ -r "$bl/max_brightness" ]; then
+                local max_b
+                max_b=$(cat "$bl/max_brightness" 2>/dev/null || echo "65535")
+                # 백업값이 유효한 숫자인지 확인
+                if echo "$prev_disp" | grep -Eq '^[0-9]+$' && [ "$prev_disp" -ge 1 ]; then
+                    echo "$prev_disp" > "$bl/brightness" 2>/dev/null || true
+                else
+                    # 백업값이 없거나 손상되었는데 현재 밝기가 25% 이하인 경우 안전 기본값(70%)으로 복원
+                    local cur_b
+                    cur_b=$(cat "$bl/brightness" 2>/dev/null || echo "0")
+                    local min_safe=$(( max_b * 25 / 100 ))
+                    if [ "$cur_b" -le "$min_safe" ]; then
+                        local safe_b=$(( max_b * 70 / 100 ))
+                        echo "$safe_b" > "$bl/brightness" 2>/dev/null || true
+                    fi
+                fi
+            fi
+        done
     fi
 }
 
@@ -370,6 +393,33 @@ show_status() {
     echo "=========================================="
 }
 
+set_restore() {
+    echo "▶ [안전 복구 (Failsafe Reset)] 실행 중..."
+    echo "  - 모든 CPU 코어, 클럭, 화면 주사율, KDE 효과를 기본값으로 강제 복구합니다."
+
+    restore_common_hardware 1
+
+    # 1. CPU 기본값 (부스트 ON, schedutil)
+    [ -w /sys/devices/system/cpu/cpufreq/boost ] && echo 1 > /sys/devices/system/cpu/cpufreq/boost
+    for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+        [ -w "$g" ] && echo schedutil > "$g"
+    done
+    # 2. ThinkPad EC
+    [ -w /sys/firmware/acpi/platform_profile ] && echo balanced > /sys/firmware/acpi/platform_profile
+    # 3. GPU & Panel
+    [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 1 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
+    [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo auto > /sys/class/drm/card1/device/power_dpm_force_performance_level
+
+    # 4. PPD 및 알림
+    powerprofilesctl set balanced >/dev/null 2>&1 || true
+    run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i security-high -t 4000 \
+        "전원 프로파일: [안전 복구 완료]" \
+        "모든 CPU 코어(16스레드), 화면 주사율(60Hz), KDE 블러 및 효과가 기본값으로 복구되었습니다."
+
+    update_state_file "balanced"
+    echo "✔ 안전 복구가 완료되었습니다. (균형 모드 전환)"
+}
+
 case "$1" in
     performance|perf)
         set_performance
@@ -386,11 +436,14 @@ case "$1" in
     toggle|toggle-ultra)
         toggle_ultra
         ;;
+    restore|reset|failsafe)
+        set_restore
+        ;;
     status)
         show_status
         ;;
     *)
-        echo "사용법: $(basename "$0") {performance|balanced|save|ultra|toggle|status}"
+        echo "사용법: $(basename "$0") {performance|balanced|save|ultra|toggle|restore|status}"
         exit 1
         ;;
 esac

@@ -72,7 +72,21 @@ Designed specifically for KDE Plasma's StatusNotifierItem popup width:
 
 ---
 
-## 6. Automatic Keyboard Backlight State Restoration
+## 6. Automatic State Restoration (Brightness, Backlight & Animations)
 
-- When entering **Ultra Save**, the current keyboard backlight brightness level (`1` or `2`) is cached in `~/.cache/prev_kbd_backlight` before turning off the LED.
-- When switching back to **Smart Save**, **Balanced**, or **Performance**, the cached brightness is automatically restored.
+- **Display Brightness**: Current screen brightness is preserved before capping to 20%, and safely restored when exiting Ultra Save. If backup is missing/corrupted, it safely falls back to standard 70% brightness.
+- **Keyboard Backlight**: Current keyboard LED level (`1` or `2`) is cached and automatically restored.
+- **KDE Plasma & KWin**: Unloaded shader effects (blur, popups), animation speed, and compositor frame limit (24 FPS) are automatically unmasked and restored to their native smoothness.
+
+---
+
+## 7. Bulletproof Failsafe & Emergency Recovery (`restore`)
+
+To guarantee system stability in any edge-case scenario (unexpected shutdowns, crashed daemon, or user preference changes):
+- **CLI One-Line Recovery**:
+  ```bash
+  power-profile-manager restore
+  ```
+  Immediately forces all 8 physical CPU cores (16 threads) online, unlocks CPU max clock ceiling, enables Boost, restores GPU DPM to `auto`, unloads 24 FPS compositor limit, restores screen refresh rate to 60Hz, reloads KDE blur effects, and returns power state to `balanced`.
+- **systemd Clean Exit (`ExecStop`)**: Stopping the `power-tray.service` unit automatically triggers `power-profile-manager restore`.
+- **C++ Signal Handlers**: Intercepting `SIGTERM` / `SIGINT` inside `power-tray` invokes background failsafe recovery before closing GTK event loop.
