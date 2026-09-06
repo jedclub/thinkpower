@@ -35,10 +35,13 @@ sudo cp "$SCRIPT_DIR/src/power-profile-manager" "/usr/local/bin/power-profile-ma
 sudo chmod +x "/usr/local/bin/power-profile-manager"
 sudo ln -sf power-profile-manager "/usr/local/bin/tp-ppm" 2>/dev/null || true
 
-# 3. sudoers 무암호 권한 등록
-echo "▶ [3/5] sudoers 하드웨어 제어 권한 등록 (/etc/sudoers.d)..."
+# 3. sudoers 무암호 권한 및 Wi-Fi 절전 커널 모듈 등록
+echo "▶ [3/5] sudoers 및 커널 모듈 최적화 설정 등록..."
 sudo cp "$SCRIPT_DIR/src/config/99-power-profile-manager" "/etc/sudoers.d/99-power-profile-manager"
 sudo chmod 0440 "/etc/sudoers.d/99-power-profile-manager"
+if [ -f "$SCRIPT_DIR/src/config/thinkpower-wifi.conf" ]; then
+    sudo cp "$SCRIPT_DIR/src/config/thinkpower-wifi.conf" "/etc/modprobe.d/thinkpower-wifi.conf" 2>/dev/null || true
+fi
 
 # 4. 데스크톱 및 시작 프로그램 등록
 echo "▶ [4/5] KDE 데스크톱 및 트레이 자동 시작 등록..."

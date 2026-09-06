@@ -19,8 +19,8 @@ echo "▶ [2/4] 바이너리 파일 제거..."
 rm -f "$HOME/.local/bin/power-tray" "$HOME/.local/bin/power-tray.py"
 sudo rm -f "/usr/local/bin/power-profile-manager" "/usr/local/bin/power-tray"
 
-echo "▶ [3/4] sudoers 권한 파일 제거..."
-sudo rm -f "/etc/sudoers.d/99-power-profile-manager"
+echo "▶ [3/4] sudoers 및 커널 모듈 설정 제거..."
+sudo rm -f "/etc/sudoers.d/99-power-profile-manager" "/etc/modprobe.d/thinkpower-wifi.conf"
 
 echo "▶ [4/4] 자동 시작 및 데스크톱 파일 제거..."
 rm -f "$HOME/.config/autostart/power-tray.desktop"

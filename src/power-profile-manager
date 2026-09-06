@@ -48,11 +48,15 @@ export XDG_RUNTIME_DIR="/run/user/$USER_ID"
 export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$USER_ID/bus"
 
 run_as_user() {
-    sudo -u "$REAL_USER" \
-        XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
-        WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
-        DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" \
+    if [ "$EUID" -eq 0 ]; then
+        sudo -u "$REAL_USER" \
+            XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+            WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
+            DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" \
+            "$@" 2>/dev/null || true
+    else
         "$@" 2>/dev/null || true
+    fi
 }
 
 # 중복 실행 방지 락 (status, analyze 등 단순 조회 제외, 동시 모드 변경 시 순차 실행 보장)
@@ -79,6 +83,9 @@ KDE_ANIM_BACKUP="${CACHE_DIR}/prev_kde_anim_factor"
 BT_BACKUP="${CACHE_DIR}/prev_bluetooth_state"
 WAYDROID_BACKUP="${CACHE_DIR}/prev_waydroid_state"
 AVAHI_BACKUP="${CACHE_DIR}/prev_avahi_state"
+DISPLAY_MODE_BACKUP="${CACHE_DIR}/prev_display_mode"
+ETH_DOWN_BACKUP="${CACHE_DIR}/prev_eth_down"
+MIC_MUTE_BACKUP="${CACHE_DIR}/prev_mic_mute"
 KWIN_HEAVY_EFFECTS="blur slidingpopups slidingnotifications slide squash scale fadingpopups blendchanges"
 
 # --internal / --quiet 플래그 확인 (power-tray 등 내부 호출 시 중복 PPD/알림 차단)
@@ -290,6 +297,42 @@ restore_common_hardware() {
     if [ -f "$WAYDROID_BACKUP" ] || [ "$force_all" -eq 1 ]; then
         systemctl start waydroid-container.service >/dev/null 2>&1 || true
         rm -f "$WAYDROID_BACKUP" 2>/dev/null || true
+    fi
+
+    # [8. 화면 주사율 60Hz 정상 복원]
+    if [ -f "$DISPLAY_MODE_BACKUP" ] || [ "$force_all" -eq 1 ]; then
+        rm -f "$DISPLAY_MODE_BACKUP" 2>/dev/null || true
+        local mode_60
+        mode_60=$(run_as_user kscreen-doctor -o 2>/dev/null | grep -oE '[0-9]+:1920x1080@60' | head -n1 | cut -d: -f1)
+        if [ -n "$mode_60" ]; then
+            if ! run_as_user kscreen-doctor -o 2>/dev/null | grep -q "1920x1080@60\.[0-9]+\*"; then
+                run_as_user kscreen-doctor "output.1.mode.${mode_60}" >/dev/null 2>&1 || true
+            fi
+        fi
+    fi
+
+    # [9. 유선 랜(Ethernet PHY) 복원]
+    if [ -f "$ETH_DOWN_BACKUP" ] || [ "$force_all" -eq 1 ]; then
+        if [ -f "$ETH_DOWN_BACKUP" ]; then
+            while read -r eth_iface; do
+                [ -n "$eth_iface" ] && ip link set "$eth_iface" up >/dev/null 2>&1 || true
+            done < "$ETH_DOWN_BACKUP"
+            rm -f "$ETH_DOWN_BACKUP" 2>/dev/null || true
+        elif [ "$force_all" -eq 1 ]; then
+            for eth in /sys/class/net/en*; do
+                [ -d "$eth" ] && ip link set "$(basename "$eth")" up >/dev/null 2>&1 || true
+            done
+        fi
+    fi
+
+    # [10. 마이크 오디오 캡처 정상 복원]
+    if [ -f "$MIC_MUTE_BACKUP" ] || [ "$force_all" -eq 1 ]; then
+        local prev_mic="0"
+        [ -f "$MIC_MUTE_BACKUP" ] && prev_mic=$(cat "$MIC_MUTE_BACKUP" 2>/dev/null || echo "0")
+        rm -f "$MIC_MUTE_BACKUP" 2>/dev/null || true
+        if [ "$prev_mic" = "0" ] || [ "$force_all" -eq 1 ]; then
+            run_as_user wpctl set-mute @DEFAULT_AUDIO_SOURCE@ 0 >/dev/null 2>&1 || true
+        fi
     fi
 }
 
@@ -542,12 +585,54 @@ set_ultra() {
         fi
     fi
 
-    # 13. PPD 및 알림
+    # 13. 하드웨어 48Hz 동적 주사율 전환 (DRRS: GPU 디스플레이 파이프 및 VRAM 폴링 전력 절감)
+    local mode_48
+    mode_48=$(run_as_user kscreen-doctor -o 2>/dev/null | grep -oE '[0-9]+:1920x1080@48' | head -n1 | cut -d: -f1)
+    if [ -n "$mode_48" ]; then
+        if [ ! -f "$DISPLAY_MODE_BACKUP" ]; then
+            echo "$mode_48" > "$DISPLAY_MODE_BACKUP"
+            chmod 666 "$DISPLAY_MODE_BACKUP" 2>/dev/null || true
+        fi
+        if ! run_as_user kscreen-doctor -o 2>/dev/null | grep -q "1920x1080@48\.[0-9]+\*"; then
+            run_as_user kscreen-doctor "output.1.mode.${mode_48}" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    # 14. 미사용 유선 랜(Ethernet PHY) 완전 파워다운
+    rm -f "$ETH_DOWN_BACKUP" 2>/dev/null || true
+    for eth_path in /sys/class/net/en*; do
+        if [ -d "$eth_path" ]; then
+            local iface; iface=$(basename "$eth_path")
+            local carrier=0
+            [ -r "$eth_path/carrier" ] && carrier=$(cat "$eth_path/carrier" 2>/dev/null || echo 0)
+            if [ "$carrier" -eq 0 ]; then
+                echo "$iface" >> "$ETH_DOWN_BACKUP"
+                command -v ethtool >/dev/null 2>&1 && ethtool -s "$iface" wol d >/dev/null 2>&1 || true
+                ip link set "$iface" down >/dev/null 2>&1 || true
+            fi
+        fi
+    done
+    [ -f "$ETH_DOWN_BACKUP" ] && chmod 666 "$ETH_DOWN_BACKUP" 2>/dev/null || true
+
+    # 15. 마이크 ADC 아날로그 입력 회로 절전
+    if [ ! -f "$MIC_MUTE_BACKUP" ]; then
+        local mic_vol
+        mic_vol=$(run_as_user wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null || echo "")
+        if echo "$mic_vol" | grep -qi "\[MUTED\]"; then
+            echo 1 > "$MIC_MUTE_BACKUP"
+        else
+            echo 0 > "$MIC_MUTE_BACKUP"
+            run_as_user wpctl set-mute @DEFAULT_AUDIO_SOURCE@ 1 >/dev/null 2>&1 || true
+        fi
+        chmod 666 "$MIC_MUTE_BACKUP" 2>/dev/null || true
+    fi
+
+    # 16. PPD 및 알림
     if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
         powerprofilesctl set power-saver >/dev/null 2>&1 || true
         run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-powersave-symbolic -t 4000 \
             "전원 프로파일: [초절전]" \
-            "CPU 1.4GHz+teo | SMU 4W | 백그라운드 절전 | 화면 20% | BT OFF\n(※ 16스레드 및 60Hz 정상 가동)"
+            "CPU 1.4GHz+teo | SMU 4W | DRRS 48Hz | 백그라운드 절전 | 화면 20% | BT OFF\n(※ 16스레드 가동 & 이더넷/마이크 절전)"
     fi
 }
 
@@ -605,6 +690,16 @@ show_status() {
         bg_stat="초절전 동결 (ksystemstats, ananicy, avahi 등 일시 정지)"
     fi
     echo "  - 백그라운드 데몬 : $bg_stat"
+    local cur_rate="60Hz"
+    if run_as_user kscreen-doctor -o 2>/dev/null | grep -q "1920x1080@48\.[0-9]+\*"; then
+        cur_rate="48Hz (초절전 DRRS)"
+    fi
+    echo "  - 화면 주사율     : $cur_rate"
+    local eth_stat="정상 가동 (Link Ready)"
+    if [ -f "$ETH_DOWN_BACKUP" ]; then
+        eth_stat="초절전 파워다운 (미연결 PHY 절전 슬립)"
+    fi
+    echo "  - 유선 랜(Ethernet): $eth_stat"
     IDLE_GOV=$(cat /sys/devices/system/cpu/cpuidle/current_governor 2>/dev/null || echo "?")
     THP=$(cat /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null | grep -o '\[.*\]' | tr -d '[]' || echo "?")
     SWAP_VAL=$(cat /proc/sys/vm/swappiness 2>/dev/null || echo "?")
@@ -822,7 +917,7 @@ set_restore() {
     powerprofilesctl set balanced >/dev/null 2>&1 || true
 
     # 6. 잔여 백업 파일 완전 정리
-    rm -f "$KBD_BACKUP" "$DISP_BACKUP" "$KDE_ANIM_BACKUP" "$BT_BACKUP" "$WAYDROID_BACKUP" "$AVAHI_BACKUP" 2>/dev/null || true
+    rm -f "$KBD_BACKUP" "$DISP_BACKUP" "$KDE_ANIM_BACKUP" "$BT_BACKUP" "$WAYDROID_BACKUP" "$AVAHI_BACKUP" "$DISPLAY_MODE_BACKUP" "$ETH_DOWN_BACKUP" "$MIC_MUTE_BACKUP" 2>/dev/null || true
 
     # 7. 알림 (power-tray 미사용 단독 CLI 실행 시에만 알림)
     if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then

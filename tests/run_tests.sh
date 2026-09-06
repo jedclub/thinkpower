@@ -96,6 +96,7 @@ assert_output_contains "Failsafe: Restore resets GPU OverDrive" 'pp_od_clk_volta
 assert_output_contains "Failsafe: Boot ID tracking implemented" "power_profile_boot_id" grep "power_profile_boot_id" "${ROOT_DIR}/src/power-profile-manager"
 assert_output_contains "Failsafe: Auto charger trigger handler exists" "handle_ac_event" grep "handle_ac_event" "${ROOT_DIR}/src/power-profile-manager"
 assert_output_contains "Failsafe: Restore unfreezes and resumes all background daemons" "killall -CONT ksystemstats" grep "killall -CONT ksystemstats" "${ROOT_DIR}/src/power-profile-manager"
+assert_output_contains "Failsafe: Restore reverts screen refresh rate to 60Hz" "output.1.mode" grep "output.1.mode" "${ROOT_DIR}/src/power-profile-manager"
 
 # ------------------------------------------------------------------------------
 # 4. Silicon & Hardware Tuning Constraints
@@ -110,6 +111,9 @@ assert_output_contains "Ultra mode enforces laptop_mode 5 (NVMe ASPM)" "laptop_m
 assert_output_contains "Ultra mode cuts Bluetooth radio" "rfkill block bluetooth" grep "rfkill block bluetooth" "${ROOT_DIR}/src/power-profile-manager"
 assert_output_contains "Ultra mode freezes background monitoring daemons (SIGSTOP)" "killall -STOP ksystemstats" grep "killall -STOP ksystemstats" "${ROOT_DIR}/src/power-profile-manager"
 assert_output_contains "Ultra mode powers down mDNS and idle containers" "systemctl stop avahi-daemon.service" grep "systemctl stop avahi-daemon.service" "${ROOT_DIR}/src/power-profile-manager"
+assert_output_contains "Ultra mode switches screen refresh rate to 48Hz DRRS" "output.1.mode" grep "output.1.mode" "${ROOT_DIR}/src/power-profile-manager"
+assert_output_contains "Ultra mode powers down uncarrier Ethernet PHY" "ethtool -s" grep "ethtool -s" "${ROOT_DIR}/src/power-profile-manager"
+assert_output_contains "Ultra mode mutes microphone capture ADC" "set-mute @DEFAULT_AUDIO_SOURCE@ 1" grep "set-mute @DEFAULT_AUDIO_SOURCE@ 1" "${ROOT_DIR}/src/power-profile-manager"
 
 # ------------------------------------------------------------------------------
 # 5. Compiled Binary Verification (if bin/power-tray exists)
