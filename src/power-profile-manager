@@ -86,6 +86,7 @@ AVAHI_BACKUP="${CACHE_DIR}/prev_avahi_state"
 DISPLAY_MODE_BACKUP="${CACHE_DIR}/prev_display_mode"
 ETH_DOWN_BACKUP="${CACHE_DIR}/prev_eth_down"
 MIC_MUTE_BACKUP="${CACHE_DIR}/prev_mic_mute"
+WIFI_BACKUP="${CACHE_DIR}/prev_wifi_state"
 KWIN_HEAVY_EFFECTS="blur slidingpopups slidingnotifications slide squash scale fadingpopups blendchanges"
 
 # --internal / --quiet 플래그 확인 (power-tray 등 내부 호출 시 중복 PPD/알림 차단)
@@ -334,6 +335,12 @@ restore_common_hardware() {
             run_as_user wpctl set-mute @DEFAULT_AUDIO_SOURCE@ 0 >/dev/null 2>&1 || true
         fi
     fi
+
+    # [11. 무선 랜(Wi-Fi) 라디오 정상 복원]
+    if [ -f "$WIFI_BACKUP" ] || [ "$force_all" -eq 1 ]; then
+        rm -f "$WIFI_BACKUP" 2>/dev/null || true
+        rfkill unblock wifi >/dev/null 2>&1 || true
+    fi
 }
 
 set_performance() {
@@ -409,10 +416,40 @@ set_save() {
     [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo auto > /sys/class/drm/card1/device/power_dpm_force_performance_level
     # 5. PCIe Runtime PM
     command -v powertop >/dev/null 2>&1 && powertop --auto-tune >/dev/null 2>&1 || true
-    # 6. PPD 및 알림 (power-tray 미사용 단독 CLI 실행 시에만 동기화 및 알림)
+
+    # 6. 미사용 유선 랜(Ethernet PHY) 파워다운
+    for eth_path in /sys/class/net/en*; do
+        if [ -d "$eth_path" ]; then
+            local iface; iface=$(basename "$eth_path")
+            local carrier=0
+            [ -r "$eth_path/carrier" ] && carrier=$(cat "$eth_path/carrier" 2>/dev/null || echo 0)
+            if [ "$carrier" -eq 0 ]; then
+                echo "$iface" >> "$ETH_DOWN_BACKUP"
+                command -v ethtool >/dev/null 2>&1 && ethtool -s "$iface" wol d >/dev/null 2>&1 || true
+                ip link set "$iface" down >/dev/null 2>&1 || true
+            fi
+        fi
+    done
+    [ -f "$ETH_DOWN_BACKUP" ] && chmod 666 "$ETH_DOWN_BACKUP" 2>/dev/null || true
+
+    # 7. 미사용 무선 랜(Wi-Fi) 통제: 미연결 시 라디오 완전 차단, 연결 시 802.11 DTIM 절전
+    local wlan_dev; wlan_dev=$(iw dev 2>/dev/null | awk '$1=="Interface"{print $2}' | head -n1)
+    if [ -n "$wlan_dev" ]; then
+        if ! iw dev "$wlan_dev" link 2>/dev/null | grep -q "Connected to"; then
+            if [ ! -f "$WIFI_BACKUP" ]; then
+                echo 1 > "$WIFI_BACKUP"
+                chmod 666 "$WIFI_BACKUP" 2>/dev/null || true
+            fi
+            rfkill block wifi 2>/dev/null || true
+        else
+            iw dev "$wlan_dev" set power_save on 2>/dev/null || true
+        fi
+    fi
+
+    # 8. PPD 및 알림 (power-tray 미사용 단독 CLI 실행 시에만 동기화 및 알림)
     if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
         powerprofilesctl set power-saver >/dev/null 2>&1 || true
-        run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-powersave-symbolic -t 3000 "전원 프로파일: [스마트 절전]" "부스트 OFF(1.7GHz 상한) 및 SMU 10W 제한\n(Wi-Fi, 블루투스, 16스레드 100% 유지)"
+        run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-powersave-symbolic -t 3000 "전원 프로파일: [스마트 절전]" "부스트 OFF(1.7GHz 상한) 및 SMU 10W 제한\n(미사용 유선/무선 자동 절전 & 16스레드 유지)"
     fi
 }
 
@@ -547,20 +584,40 @@ set_ultra() {
         [ -w "$host" ] && echo min_power > "$host" 2>/dev/null || true
     done
 
-    # 11. 블루투스 하드웨어 라디오 완전 차단 (RF 방출 중단, 약 0.5W 추가 절감, 이전 상태 백업)
-    local bt_blocked=0
-    if rfkill list bluetooth 2>/dev/null | grep -qi "Soft blocked: yes"; then
-        bt_blocked=1
+    # 11. 블루투스 하드웨어 통제 (미사용 시 라디오 완전 차단, 연결 장치 있을 시 연결 유지)
+    local bt_connected=0
+    if run_as_user bluetoothctl devices Connected 2>/dev/null | grep -q "Device"; then
+        bt_connected=1
     fi
-    if [ ! -f "$BT_BACKUP" ]; then
-        if [ "$bt_blocked" -eq 0 ]; then
-            echo 1 > "$BT_BACKUP"
-        else
-            echo 0 > "$BT_BACKUP"
+    if [ "$bt_connected" -eq 0 ]; then
+        local bt_blocked=0
+        if rfkill list bluetooth 2>/dev/null | grep -qi "Soft blocked: yes"; then
+            bt_blocked=1
         fi
-        chmod 666 "$BT_BACKUP" 2>/dev/null || true
+        if [ ! -f "$BT_BACKUP" ]; then
+            if [ "$bt_blocked" -eq 0 ]; then
+                echo 1 > "$BT_BACKUP"
+            else
+                echo 0 > "$BT_BACKUP"
+            fi
+            chmod 666 "$BT_BACKUP" 2>/dev/null || true
+        fi
+        rfkill block bluetooth 2>/dev/null || true
     fi
-    rfkill block bluetooth 2>/dev/null || true
+
+    # 11-1. 무선 랜(Wi-Fi) 통제 (미연결 시 라디오 완전 차단, 연결 시 802.11 DTIM 절전)
+    local wlan_dev; wlan_dev=$(iw dev 2>/dev/null | awk '$1=="Interface"{print $2}' | head -n1)
+    if [ -n "$wlan_dev" ]; then
+        if ! iw dev "$wlan_dev" link 2>/dev/null | grep -q "Connected to"; then
+            if [ ! -f "$WIFI_BACKUP" ]; then
+                echo 1 > "$WIFI_BACKUP"
+                chmod 666 "$WIFI_BACKUP" 2>/dev/null || true
+            fi
+            rfkill block wifi 2>/dev/null || true
+        else
+            iw dev "$wlan_dev" set power_save on 2>/dev/null || true
+        fi
+    fi
 
     # 12. 백그라운드 비필수 데몬 및 서비스 동결/중단 (Background Services Power-Down)
     # 12-1. 불필요하게 센서/프로세스를 풀스캔하는 유저 세션 데몬 일시 정지 (SIGSTOP: 메모리 유지, CPU 웨이크업 0%)
@@ -575,13 +632,14 @@ set_ultra() {
         systemctl stop avahi-daemon.service 2>/dev/null || true
     fi
 
-    # 12-3. 미사용 Waydroid LXC 컨테이너 파워다운 (세션이 비활성일 때만 컨테이너 데몬 중지)
+    # 12-3. 미사용 Waydroid LXC 컨테이너 및 가상 브리지 파워다운
     if systemctl is-active waydroid-container.service >/dev/null 2>&1; then
         local w_session; w_session=$(waydroid status 2>/dev/null | grep -i "Session:" | awk '{print $2}' || echo "STOPPED")
         if [ "$w_session" = "STOPPED" ] || [ -z "$w_session" ]; then
             echo 1 > "$WAYDROID_BACKUP"
             chmod 666 "$WAYDROID_BACKUP" 2>/dev/null || true
             systemctl stop waydroid-container.service 2>/dev/null || true
+            ip link set waydroid0 down 2>/dev/null || true
         fi
     fi
 
@@ -681,9 +739,17 @@ show_status() {
     echo "  - 키보드 백라이트 : $KBD (0=소등)"
     local bt_stat="ON (정상 가동)"
     if rfkill list bluetooth 2>/dev/null | grep -qi "Soft blocked: yes"; then
-        bt_stat="OFF (초절전 하드웨어 차단)"
+        bt_stat="OFF (미사용 하드웨어 차단)"
+    elif run_as_user bluetoothctl devices Connected 2>/dev/null | grep -q "Device"; then
+        bt_stat="ON (기기 연결 사용 중)"
     fi
-    echo "  - Wi-Fi (무선랜)  : 정상 가동 (인터넷 유지)"
+    local wifi_stat="ON (인터넷 연결 가동)"
+    if rfkill list wifi 2>/dev/null | grep -qi "Soft blocked: yes"; then
+        wifi_stat="OFF (미연결 무선 라디오 차단)"
+    elif iw dev wlan0 link 2>/dev/null | grep -q "Connected to"; then
+        wifi_stat="ON (연결 가동 / 802.11 DTIM 절전)"
+    fi
+    echo "  - Wi-Fi (무선랜)  : $wifi_stat"
     echo "  - 블루투스 (BT)   : $bt_stat"
     local bg_stat="정상 가동 (Active)"
     if [ "$CURRENT" = "ultra" ]; then
@@ -916,8 +982,9 @@ set_restore() {
     # 5. PPD 동기화
     powerprofilesctl set balanced >/dev/null 2>&1 || true
 
-    # 6. 잔여 백업 파일 완전 정리
-    rm -f "$KBD_BACKUP" "$DISP_BACKUP" "$KDE_ANIM_BACKUP" "$BT_BACKUP" "$WAYDROID_BACKUP" "$AVAHI_BACKUP" "$DISPLAY_MODE_BACKUP" "$ETH_DOWN_BACKUP" "$MIC_MUTE_BACKUP" 2>/dev/null || true
+    # 6. 무선 랜 및 잔여 백업 파일 완전 정리
+    rfkill unblock wifi >/dev/null 2>&1 || true
+    rm -f "$KBD_BACKUP" "$DISP_BACKUP" "$KDE_ANIM_BACKUP" "$BT_BACKUP" "$WAYDROID_BACKUP" "$AVAHI_BACKUP" "$DISPLAY_MODE_BACKUP" "$ETH_DOWN_BACKUP" "$MIC_MUTE_BACKUP" "$WIFI_BACKUP" 2>/dev/null || true
 
     # 7. 알림 (power-tray 미사용 단독 CLI 실행 시에만 알림)
     if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
