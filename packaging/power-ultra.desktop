@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=초절전 모드 (토글)
+Name[ko]=초절전 모드 (토글)
+Comment=Toggle ThinkPower Ultra Power Saver Mode
+Comment[ko]=초절전 모드 켜기/끄기 (Wi-Fi, 블루투스 유지)
+Exec=/usr/bin/power-profile-manager toggle
+Icon=battery-low
+Terminal=false
+Type=Application
+Categories=System;Settings;Utility;
+Keywords=power;battery;saver;ultra;energy;전원;배터리;절전;초절전;
+StartupNotify=false

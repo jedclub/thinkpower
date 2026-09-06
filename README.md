@@ -146,32 +146,53 @@ sudo dnf install gcc-c++ make cmake pkgconfig libayatana-appindicator-devel gtk3
 sudo apt install build-essential cmake pkg-config libayatana-appindicator3-dev libgtk-3-dev libglib2.0-dev power-profiles-daemon upower libnotify-bin
 ```
 
-### 2. Quick Install
+### 2. Native Package Installation (Arch Linux / CachyOS / Manjaro)
 
-Clone the repository and run the automated build and installation script:
+The recommended installation method on Arch-based distributions is using the native pacman package with **PGO (Profile-Guided Optimization) + AVX2 + LTO**:
 
 ```bash
-git clone https://github.com/your-username/thinkpower.git
-cd thinkpower
-./install.sh
+# 1. Build the native package (runs 500,000 profiling iterations & builds .pkg.tar.zst)
+make pkg
+
+# 2. Install using pacman
+sudo pacman -U thinkpower-1.0.0-1-x86_64.pkg.tar.zst
+
+# 3. Enable and start the user tray daemon
+systemctl --user enable --now power-tray.service
 ```
 
-The installer will:
-1. Compile the native C++ binary (`bin/power-tray`) using `make`.
-2. Install `power-tray` in `~/.local/bin/`.
-3. Install `power-profile-manager` in `/usr/local/bin/`.
-4. Configure the passwordless sudoers drop-in in `/etc/sudoers.d/99-power-profile-manager`.
-5. Register and start the `power-tray.service` systemd user service.
-6. Create desktop entries in `~/.config/autostart/` and `~/.local/share/applications/`.
+### 3. Universal Release Build & Tarball
+
+To generate all distribution packages in one command:
+
+```bash
+make release
+```
+
+This will automatically create:
+- **`thinkpower-1.0.0-1-x86_64.pkg.tar.zst`**: Native Arch/CachyOS package.
+- **`release/thinkpower-1.0.0-linux-x86_64.tar.gz`**: Standalone portable distribution archive with built-in installer.
+
+### 4. Local Quick Script Install
+
+Alternatively, you can build and install directly to `~/.local/bin/` without building a package:
+
+```bash
+./install.sh
+```
 
 ---
 
 ## 🗑️ Uninstallation
 
-To cleanly remove all ThinkPower components and restore default OS power behavior:
-
+**If installed via pacman package:**
 ```bash
-cd thinkpower
+systemctl --user disable --now power-tray.service
+sudo pacman -R thinkpower
+```
+
+**If installed via `install.sh`:**
+```bash
 ./uninstall.sh
 ```
 

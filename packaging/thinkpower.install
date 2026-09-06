@@ -1,0 +1,22 @@
+post_install() {
+    chmod 0440 /etc/sudoers.d/99-power-profile-manager 2>/dev/null || true
+    echo "========================================================="
+    echo "  ✅ ThinkPower가 성공적으로 설치되었습니다."
+    echo "  아래 명령으로 시스템 트레이 데몬을 시작할 수 있습니다:"
+    echo "    systemctl --user enable --now power-tray.service"
+    echo "========================================================="
+}
+
+post_upgrade() {
+    chmod 0440 /etc/sudoers.d/99-power-profile-manager 2>/dev/null || true
+    echo "========================================================="
+    echo "  ✅ ThinkPower가 성공적으로 업데이트되었습니다."
+    echo "  실행 중인 서비스를 재시작하려면 아래 명령을 실행하세요:"
+    echo "    systemctl --user restart power-tray.service"
+    echo "========================================================="
+}
+
+pre_remove() {
+    echo ":: ThinkPower 제거 전 사용자 서비스 정지를 권장합니다:"
+    echo "   systemctl --user disable --now power-tray.service"
+}

@@ -62,11 +62,27 @@ pgo: $(SRC) | $(BIN_DIR)
 	@echo "========================================================="
 
 clean:
-	rm -rf $(BIN_DIR) build src/power-tray
+	rm -rf $(BIN_DIR) build src/power-tray pkg src release *.pkg.tar.zst
+
+pkg:
+	@echo "==> Building native Arch/CachyOS package with makepkg..."
+	makepkg -f --nodeps
+
+release: pgo pkg
+	@echo "==> Packaging standalone universal distribution tarball..."
+	@mkdir -p release/thinkpower-1.0.0
+	@cp -a bin src packaging install.sh uninstall.sh LICENSE README.md Makefile CMakeLists.txt release/thinkpower-1.0.0/
+	@tar -czf release/thinkpower-1.0.0-linux-x86_64.tar.gz -C release thinkpower-1.0.0
+	@rm -rf release/thinkpower-1.0.0
+	@echo "========================================================="
+	@echo "  🎁 Release Artifacts Generated in $(CURDIR):"
+	@echo "    - Arch/CachyOS Package : thinkpower-1.0.0-1-x86_64.pkg.tar.zst"
+	@echo "    - Standalone Tarball   : release/thinkpower-1.0.0-linux-x86_64.tar.gz"
+	@echo "========================================================="
 
 install: $(TARGET)
 	install -d $(DESTDIR)/usr/local/bin
 	install -m 755 $(TARGET) $(DESTDIR)/usr/local/bin/power-tray
 	install -m 755 src/power-profile-manager $(DESTDIR)/usr/local/bin/power-profile-manager
 
-.PHONY: all clean install pgo
+.PHONY: all clean install pgo pkg release

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=ThinkPower Tray
+Comment=Advanced Battery & Power Management Tray for KDE Plasma
+Exec=/usr/bin/power-tray
+Icon=battery-profile-balanced-symbolic
+Terminal=false
+Type=Application
+Categories=Utility;System;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-after=panel

@@ -1,0 +1,12 @@
+[Unit]
+Description=ThinkPower 4-Stage Power & Battery Indicator
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/power-tray
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
