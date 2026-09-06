@@ -152,7 +152,11 @@ private:
 
     bool updating_ui = false;
     std::string current_mode = "balanced";
+    std::string previous_mode;
     gint64 last_switch_time_us = 0;
+    gint64 user_manual_lock_until_us = 0;
+    bool last_ac_online = false;
+    gint64 last_ac_toggle_time_us = 0;
     std::string pending_dbus_expected_profile;
 
     GDBusConnection *dbus_conn = nullptr;
@@ -597,6 +601,12 @@ void PowerTrayApp::update_state_ui() {
     std::string mode = get_current_mode();
     BatteryInfo bat = get_battery_info();
 
+    gint64 now_mono = g_get_monotonic_time();
+    if (bat.ac_online != last_ac_online) {
+        last_ac_online = bat.ac_online;
+        last_ac_toggle_time_us = now_mono;
+    }
+
     if (radio_items.count(mode) && radio_items[mode]) {
         GtkCheckMenuItem *chk = GTK_CHECK_MENU_ITEM(radio_items[mode]);
         if (!gtk_check_menu_item_get_active(chk)) {
@@ -665,10 +675,30 @@ void PowerTrayApp::switch_mode(const std::string &mode_key, const std::string &t
     }
 
     gint64 now = g_get_monotonic_time();
-    // Cooldown debouncing: ignore rapid toggling within 1.5 seconds if coming from D-Bus
-    if (trigger_source == "dbus" && (now - last_switch_time_us < 1500000)) {
-        return;
+
+    if (trigger_source == "dbus") {
+        // 1. User manual selection lock (60 seconds)
+        if (now < user_manual_lock_until_us) {
+            return;
+        }
+        // 2. Hardware AC flap suppression (if AC toggled within 10s, ignore transient profile requests)
+        if (now - last_ac_toggle_time_us < 10000000LL) {
+            return;
+        }
+        // 3. Minimum D-Bus switch cooldown (10.0 seconds)
+        if (now - last_switch_time_us < 10000000LL) {
+            return;
+        }
+        // 4. Ping-pong oscillation guard (30.0 seconds before allowing reversal back to previous_mode)
+        if (mode_key == previous_mode && (now - last_switch_time_us < 30000000LL)) {
+            return;
+        }
+    } else if (trigger_source == "user") {
+        // User explicitly picked a mode: protect from external D-Bus/AC overrides for 60 seconds
+        user_manual_lock_until_us = now + (60LL * 1000000LL);
     }
+
+    previous_mode = current_mode;
     last_switch_time_us = now;
 
     set_current_mode(mode_key);
@@ -788,7 +818,19 @@ void PowerTrayApp::on_dbus_signal(const std::string &new_os_profile) {
     }
 
     gint64 now = g_get_monotonic_time();
-    if (now - last_switch_time_us < 1500000) {
+
+    // 1. User manual selection lock (60 seconds)
+    if (now < user_manual_lock_until_us) {
+        return;
+    }
+
+    // 2. Hardware AC flap suppression (if AC toggled within 10s, ignore transient profile requests)
+    if (now - last_ac_toggle_time_us < 10000000LL) {
+        return;
+    }
+
+    // 3. Minimum D-Bus switch cooldown (10.0 seconds)
+    if (now - last_switch_time_us < 10000000LL) {
         return;
     }
 
@@ -801,6 +843,11 @@ void PowerTrayApp::on_dbus_signal(const std::string &new_os_profile) {
         if (current_mode != "ultra") {
             target_mode = "save";
         }
+    }
+
+    // 4. Ping-pong oscillation guard (30.0 seconds before allowing reversal back to previous_mode)
+    if (target_mode == previous_mode && (now - last_switch_time_us < 30000000LL)) {
+        return;
     }
 
     if (target_mode != current_mode) {
