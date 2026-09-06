@@ -59,6 +59,7 @@ STATE_FILE="${CACHE_DIR}/power_profile_mode"
 KBD_BACKUP="${CACHE_DIR}/prev_kbd_backlight"
 DISP_BACKUP="${CACHE_DIR}/prev_display_brightness"
 KDE_ANIM_BACKUP="${CACHE_DIR}/prev_kde_anim_factor"
+BT_BACKUP="${CACHE_DIR}/prev_bluetooth_state"
 KWIN_HEAVY_EFFECTS="blur slidingpopups slidingnotifications slide squash scale fadingpopups blendchanges"
 
 # --internal / --quiet 플래그 확인 (power-tray 등 내부 호출 시 중복 PPD/알림 차단)
@@ -97,7 +98,7 @@ if [ -n "$CUR_BOOT_ID" ] && [ "$CUR_BOOT_ID" != "$LAST_BOOT_ID" ]; then
     # 신규 부팅 감지: 이전 부팅 세션 잔여 상태 및 백업 파일 정리, 균형(balanced) 모드로 안전 초기화
     echo "balanced" > "$STATE_FILE"
     echo "$CUR_BOOT_ID" > "$BOOT_ID_FILE"
-    rm -f "$KBD_BACKUP" "$DISP_BACKUP" "$KDE_ANIM_BACKUP" 2>/dev/null || true
+    rm -f "$KBD_BACKUP" "$DISP_BACKUP" "$KDE_ANIM_BACKUP" "$BT_BACKUP" 2>/dev/null || true
     chown "$REAL_USER:" "$STATE_FILE" "$BOOT_ID_FILE" 2>/dev/null || true
     chmod 666 "$STATE_FILE" "$BOOT_ID_FILE" 2>/dev/null || true
 elif [ ! -f "$STATE_FILE" ]; then
@@ -243,6 +244,17 @@ restore_common_hardware() {
             fi
         done
     fi
+
+    # [6. 블루투스 안전 복원]
+    if [ -f "$BT_BACKUP" ] || [ "$force_all" -eq 1 ]; then
+        local prev_bt="1"
+        [ -f "$BT_BACKUP" ] && prev_bt=$(cat "$BT_BACKUP" 2>/dev/null || echo "1")
+        rm -f "$BT_BACKUP"
+        if [ "$prev_bt" = "1" ] || [ "$force_all" -eq 1 ]; then
+            rfkill unblock bluetooth >/dev/null 2>&1 || true
+            (sleep 0.1 && run_as_user bluetoothctl power on >/dev/null 2>&1) &
+        fi
+    fi
 }
 
 set_performance() {
@@ -326,7 +338,7 @@ set_save() {
 }
 
 set_ultra() {
-    echo "▶ [초절전 모드] 안전 적용 중 (16스레드 유지, CPU 1.4GHz, SMU 4W 하드웨어 락, GPU 50% 제한)..."
+    echo "▶ [초절전 모드] 안전 적용 중 (16스레드 유지, CPU 1.4GHz, SMU 4W 하드웨어 락, GPU 40% 제한)..."
     restore_common_hardware
     update_state_file "ultra"
 
@@ -346,17 +358,17 @@ set_ultra() {
     local radj; radj=$(find_ryzenadj)
     [ -n "$radj" ] && "$radj" --stapm-limit=4000 --fast-limit=5000 --slow-limit=4000 --tctl-temp=60 >/dev/null 2>&1 || true
 
-    # 4. GPU 제한: 정확한 50% 상한 (800MHz Cap, 200MHz 바닥 락 절대 금지!)
+    # 4. GPU 제한: 정확한 40% 상한 (640MHz Cap, 200MHz 바닥 락 절대 금지!)
     local gpu_dev="/sys/class/drm/card1/device"
     [ ! -d "$gpu_dev" ] && gpu_dev="/sys/class/drm/card0/device"
     if [ -d "$gpu_dev" ]; then
-        # 1600MHz의 50%인 800MHz로 최대 주파수 상한 설정 (OverDrive)
+        # 1600MHz의 40%인 640MHz로 최대 주파수 상한 설정 (OverDrive)
         if [ -w "$gpu_dev/pp_od_clk_voltage" ] && [ -w "$gpu_dev/power_dpm_force_performance_level" ]; then
             echo manual > "$gpu_dev/power_dpm_force_performance_level"
-            echo "s 1 800" > "$gpu_dev/pp_od_clk_voltage"
+            echo "s 1 640" > "$gpu_dev/pp_od_clk_voltage"
             echo "c" > "$gpu_dev/pp_od_clk_voltage"
         fi
-        # DPM 레벨은 auto로 두어 200~800MHz 사이를 화면 부하에 맞게 부드럽게 동적 조절
+        # DPM 레벨은 auto로 두어 200~640MHz 사이를 화면 부하에 맞게 부드럽게 동적 조절
     fi
 
     # 패널 백라이트 적응형 절전 레벨 4 (최대 절전)
@@ -422,12 +434,27 @@ set_ultra() {
     # 10. PCIe Runtime PM
     command -v powertop >/dev/null 2>&1 && powertop --auto-tune >/dev/null 2>&1 || true
 
-    # 11. PPD 및 알림
+    # 11. 블루투스 하드웨어 라디오 완전 차단 (RF 방출 중단, 약 0.5W 추가 절감, 이전 상태 백업)
+    local bt_blocked=0
+    if rfkill list bluetooth 2>/dev/null | grep -qi "Soft blocked: yes"; then
+        bt_blocked=1
+    fi
+    if [ ! -f "$BT_BACKUP" ]; then
+        if [ "$bt_blocked" -eq 0 ]; then
+            echo 1 > "$BT_BACKUP"
+        else
+            echo 0 > "$BT_BACKUP"
+        fi
+        chmod 666 "$BT_BACKUP" 2>/dev/null || true
+    fi
+    rfkill block bluetooth 2>/dev/null || true
+
+    # 12. PPD 및 알림
     if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
         powerprofilesctl set power-saver >/dev/null 2>&1 || true
         run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-powersave-symbolic -t 4000 \
             "전원 프로파일: [초절전]" \
-            "CPU 1.4GHz+teo | SMU 4W 하드웨어 락 | 화면 20% | 키보드 OFF | GPU 50%\n(※ 16스레드 및 60Hz 정상 가동)"
+            "CPU 1.4GHz+teo | SMU 4W | 화면 20% | 키보드 OFF | BT OFF | GPU 40%\n(※ 16스레드 및 60Hz 정상 가동)"
     fi
 }
 
@@ -474,7 +501,12 @@ show_status() {
     echo "  - PCIe ASPM 정책  : $ASPM"
     echo "  - 커널 랩톱 모드  : $VM_LM (5=디스크I/O 극한 버퍼링)"
     echo "  - 키보드 백라이트 : $KBD (0=소등)"
-    echo "  - Wi-Fi / BT      : 항상 정상 가동 (연결 유지)"
+    local bt_stat="ON (정상 가동)"
+    if rfkill list bluetooth 2>/dev/null | grep -qi "Soft blocked: yes"; then
+        bt_stat="OFF (초절전 하드웨어 차단)"
+    fi
+    echo "  - Wi-Fi (무선랜)  : 정상 가동 (인터넷 유지)"
+    echo "  - 블루투스 (BT)   : $bt_stat"
     IDLE_GOV=$(cat /sys/devices/system/cpu/cpuidle/current_governor 2>/dev/null || echo "?")
     THP=$(cat /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null | grep -o '\[.*\]' | tr -d '[]' || echo "?")
     SWAP_VAL=$(cat /proc/sys/vm/swappiness 2>/dev/null || echo "?")
@@ -527,7 +559,7 @@ set_restore() {
     powerprofilesctl set balanced >/dev/null 2>&1 || true
 
     # 6. 잔여 백업 파일 완전 정리
-    rm -f "$KBD_BACKUP" "$DISP_BACKUP" "$KDE_ANIM_BACKUP" 2>/dev/null || true
+    rm -f "$KBD_BACKUP" "$DISP_BACKUP" "$KDE_ANIM_BACKUP" "$BT_BACKUP" 2>/dev/null || true
 
     # 7. 알림 (power-tray 미사용 단독 CLI 실행 시에만 알림)
     if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
