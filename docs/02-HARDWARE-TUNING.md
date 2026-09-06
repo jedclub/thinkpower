@@ -58,6 +58,19 @@ This document details every kernel sysfs interface, hardware register, and drive
 - **Ultra Save**: `low` (pins GPU SCLK to 200MHz, ~12.5% of max 1600MHz)
 - **Balanced / Performance**: `auto`
 
+### 2.5 KWin Compositor 24FPS Update Rate Limiter
+- **Configuration**: `kwriteconfig6 --file kwinrc --group Compositing --key MaxFPS 24`
+- **Mechanism**: Enforces a strict 24 FPS render cap on the Wayland display server compositor. Reducing frame composition frequency cuts compositor redraw overhead by over 50%, saving significant APU graphics render energy.
+
+### 2.6 Instant GPU Shader Cutoff (Blur & Effect Unloading)
+- **D-Bus Interface**: `qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.unloadEffect <name>`
+- **Target Effects**: `blur`, `slidingpopups`, `slidingnotifications`, `slide`, `squash`, `scale`, `fadingpopups`, `blendchanges`
+- **Mechanism**: Translucent background blurring is the single highest GPU shader workload in KDE. Dynamically unloading the `blur` effect removes all real-time Gaussian filter passes, dropping GPU memory bandwidth to near-idle levels without restarting the desktop.
+
+### 2.7 Zero-Latency Animation Elimination
+- **Configuration**: `kwriteconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor 0`
+- **Mechanism**: Eliminates interpolation frame rendering during window opening, closing, and menu popping. Windows appear instantly (0ms latency), completely stopping burst wakeups of the CPU and GPU render pipelines.
+
 ---
 
 ## 3. Bus Links & Storage I/O

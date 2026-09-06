@@ -41,6 +41,8 @@ mkdir -p "$CACHE_DIR" 2>/dev/null || true
 STATE_FILE="${CACHE_DIR}/power_profile_mode"
 KBD_BACKUP="${CACHE_DIR}/prev_kbd_backlight"
 DISP_BACKUP="${CACHE_DIR}/prev_display_brightness"
+KDE_ANIM_BACKUP="${CACHE_DIR}/prev_kde_anim_factor"
+KWIN_HEAVY_EFFECTS="blur slidingpopups slidingnotifications slide squash scale fadingpopups blendchanges"
 
 # --internal / --quiet 플래그 확인 (power-tray 등 내부 호출 시 중복 PPD/알림 차단)
 INTERNAL_CALL=0
@@ -92,12 +94,32 @@ restore_common_hardware() {
     # ryzenadj 전력 상한 복원 (설치되어 있을 경우)
     command -v ryzenadj >/dev/null 2>&1 && ryzenadj --stapm-limit=25000 --fast-limit=30000 --slow-limit=25000 --tctl-temp=95 >/dev/null 2>&1 || true
 
-    # 이전 모드가 ultra였던 경우에만 60Hz 화면 복원 및 파일 색인 재개 (불필요한 GPU 디스플레이 리셋 차단)
+    # 이전 모드가 ultra였던 경우에만 60Hz 화면 복원 및 KDE Plasma 효과 복원
     local prev_mode
     prev_mode=$(cat "$STATE_FILE" 2>/dev/null || echo "balanced")
     if [ "$prev_mode" = "ultra" ]; then
+        # 1. 60Hz 화면 복원 및 Baloo 파일 색인 재개
         run_as_user kscreen-doctor output.1.mode.1
         run_as_user balooctl6 resume
+        
+        # 2. KWin 컴포지터 MaxFPS 제한 해제 및 애니메이션 속도 원복
+        run_as_user kwriteconfig6 --file kwinrc --group Compositing --key MaxFPS --delete
+        run_as_user kwriteconfig6 --file kwinrc --group Compositing --key RefreshRate --delete
+        run_as_user kwriteconfig6 --file kwinrc --group Compositing --key AnimationSpeed 3
+        
+        # 3. 창 애니메이션 지속 시간 계수 복원
+        local prev_anim="0.25"
+        if [ -f "$KDE_ANIM_BACKUP" ]; then
+            prev_anim=$(cat "$KDE_ANIM_BACKUP" 2>/dev/null || echo "0.25")
+            rm -f "$KDE_ANIM_BACKUP"
+        fi
+        run_as_user kwriteconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor "$prev_anim"
+        run_as_user qdbus6 org.kde.KWin /KWin reconfigure
+        
+        # 4. KWin 블러 및 셰이더 효과 복원
+        for eff in $KWIN_HEAVY_EFFECTS; do
+            run_as_user qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect "$eff"
+        done
     fi
 
     # 키보드 백라이트 이전 상태 자동 복원
@@ -217,9 +239,28 @@ set_ultra() {
     # - ryzenadj: 3W 하드웨어 파워캡 (설치 시 즉시 발동, STAPM 3W / Fast 3.5W / Slow 3W)
     command -v ryzenadj >/dev/null 2>&1 && ryzenadj --stapm-limit=3000 --fast-limit=3500 --slow-limit=3000 --apu-slow-limit=3000 --tctl-temp=50 >/dev/null 2>&1 || true
 
-    # [2. 디스플레이 밝기 20% 강제 제한 & GPU 30% 이하 제한]
-    # - 주사율 60Hz -> 48Hz 다운클럭 (화면 스캔아웃 엔진 전력 절감)
+    # [2. 디스플레이 & KDE Plasma 순간 극한 최적화 (24FPS, 블러 차단, 애니메이션 0, 밝기 20%)]
+    # - 주사율 48Hz 다운클럭 (화면 스캔아웃 엔진 전력 절감)
     run_as_user kscreen-doctor output.1.mode.2
+
+    # - 1번: KWin 컴포지터 렌더링 업데이트 레이트 24FPS 강제 제한
+    run_as_user kwriteconfig6 --file kwinrc --group Compositing --key MaxFPS 24
+    run_as_user kwriteconfig6 --file kwinrc --group Compositing --key RefreshRate 24
+
+    # - 3번: 창 애니메이션 계산 완전 차단 (AnimationDurationFactor = 0, AnimationSpeed = 0)
+    local cur_anim
+    cur_anim=$(run_as_user kreadconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor 2>/dev/null || echo "0.25")
+    [ -n "$cur_anim" ] && echo "$cur_anim" > "$KDE_ANIM_BACKUP"
+    chmod 666 "$KDE_ANIM_BACKUP" 2>/dev/null || true
+    run_as_user kwriteconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor 0
+    run_as_user kwriteconfig6 --file kwinrc --group Compositing --key AnimationSpeed 0
+    run_as_user qdbus6 org.kde.KWin /KWin reconfigure
+
+    # - 2번: 무거운 GPU 셰이더 효과(블러, 슬라이딩, 페이드 등) 즉각 차단(언로드)
+    for eff in $KWIN_HEAVY_EFFECTS; do
+        run_as_user qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.unloadEffect "$eff"
+    done
+
     # - 패널 백라이트 적응형 절전 레벨 4 (최대 절감)
     [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 4 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
     # - GPU DPM 최저 고정 (sclk 200MHz 바닥으로 제한, 최대 1600MHz의 12.5% 수준으로 억제)
@@ -270,7 +311,7 @@ set_ultra() {
         powerprofilesctl set power-saver >/dev/null 2>&1 || true
         run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -u critical -i battery-low -t 5000 \
             "전원 프로파일: [⚡ 극한 초절전 ON]" \
-            "1.4GHz(4C) 고정 | 밝기 20% | GPU 저전력 | TDP 3W | 48Hz\n(※ Wi-Fi 및 블루투스는 정상 유지됩니다)"
+            "1.4GHz(4C) | 밝기 20% | 24FPS 제한 | 블러/애니 차단 | TDP 3W\n(※ Wi-Fi 및 블루투스는 정상 유지됩니다)"
     fi
 
     update_state_file "ultra"

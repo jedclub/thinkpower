@@ -93,7 +93,7 @@ Default Linux desktop power managers only set high-level ACPI platform hints. Un
 | **⚡ Performance** | Up to 4.1GHz Boost | 16T | 60Hz | Level 0 | Max Airflow | 25W ~ 40W |
 | **⚖️ Balanced** | Dynamic 1.4 ~ 4.1GHz | 16T | 60Hz | Level 1 | Balanced | 12W ~ 22W |
 | **🍃 Smart Save** | **1.7GHz Max (No Boost)** | **16T** | **60Hz** | **Level 2** | **Silent / Low** | **8W ~ 10W** |
-| **🛡️ Ultra Save** | **1.4GHz Locked (Max Cap)** | **4T (4C Parking)** | **48Hz & 20% Brightness** | **Level 4 + GPU Low (200MHz)** | **0 RPM (Off)** | **~3W Target** |
+| **🛡️ Ultra Save** | **1.4GHz Locked (Max Cap)** | **4T (4C Parking)** | **48Hz / 24FPS & 20% Bright** | **Level 4 + GPU Low + No Blur/Anim** | **0 RPM (Off)** | **~3W Target** |
 
 ---
 
