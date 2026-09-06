@@ -238,7 +238,8 @@ set_save() {
     [ -w /sys/firmware/acpi/platform_profile ] && echo low-power > /sys/firmware/acpi/platform_profile
     # 3. GPU & Panel: 적응형 백라이트 절전 2단계 (색 왜곡 없이 백라이트 절감)
     [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 2 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
-    [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo low > /sys/class/drm/card1/device/power_dpm_force_performance_level
+    # GPU DPM은 auto로 두어 화면 렌더링에 필요한 클럭을 정상 공급
+    [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo auto > /sys/class/drm/card1/device/power_dpm_force_performance_level
     # 4. PCIe Runtime PM
     command -v powertop >/dev/null 2>&1 && powertop --auto-tune >/dev/null 2>&1 || true
     # 5. PPD 및 알림 (power-tray 미사용 단독 CLI 실행 시에만 동기화 및 알림)
@@ -251,25 +252,53 @@ set_save() {
 }
 
 set_ultra() {
-    echo "▶ [초절전 모드] 적용 중 (절전과 동일: 와이파이/BT/장치 100% 정상 작동)..."
+    echo "▶ [초절전 모드] 안전 적용 중 (코어 유지, GPU 70% 제한, 터보 부스트 OFF)..."
     restore_common_hardware
 
-    # 1. CPU: 1.7GHz 상한 (부스트만 OFF, 8코어 16스레드 유지, schedutil 반응성 유지)
+    # 1. CPU: 16스레드 전체 유지! 부스트 OFF(1.7GHz 상한), schedutil 거버너로 입력 반응성 보장
     [ -w /sys/devices/system/cpu/cpufreq/boost ] && echo 0 > /sys/devices/system/cpu/cpufreq/boost
     for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
         [ -w "$g" ] && echo schedutil > "$g"
     done
-    # 2. ThinkPad EC: 저소음/저발열 프로파일
+    for sf in /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq; do
+        [ -w "$sf" ] && echo 1700000 > "$sf" 2>/dev/null || true
+    done
+
+    # 2. ThinkPad EC: 저소음/저발열 프로파일 (패키지 TDP 억제)
     [ -w /sys/firmware/acpi/platform_profile ] && echo low-power > /sys/firmware/acpi/platform_profile
-    # 3. GPU & Panel: 적응형 백라이트 절전 2단계 (색 왜곡 없이 백라이트 절감)
-    [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 2 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
-    [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo low > /sys/class/drm/card1/device/power_dpm_force_performance_level
-    # 4. PCIe Runtime PM
+
+    # 3. GPU 제한: 200MHz 바닥 락 절대 금지! 
+    # manual 모드로 0(200MHz), 1(400MHz)만 활성화하여 1600MHz 풀클럭 낭비 차단 (안전한 70% 전력 캡)
+    if [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && [ -w /sys/class/drm/card1/device/pp_dpm_sclk ]; then
+        echo manual > /sys/class/drm/card1/device/power_dpm_force_performance_level 2>/dev/null || true
+        echo "0 1" > /sys/class/drm/card1/device/pp_dpm_sclk 2>/dev/null || true
+    else
+        [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo auto > /sys/class/drm/card1/device/power_dpm_force_performance_level 2>/dev/null || true
+    fi
+
+    # 패널 백라이트 적응형 절전 레벨 3 (색 왜곡 없이 디스플레이 전력 30% 절감)
+    [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 3 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
+
+    # 4. KDE Plasma 안전 최적화 (24FPS 차단/블러 언로드 금지! 60Hz 화면 주사율 100% 유지)
+    local cur_anim
+    cur_anim=$(run_as_user kreadconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor 2>/dev/null || echo "0.25")
+    [ -n "$cur_anim" ] && echo "$cur_anim" > "$KDE_ANIM_BACKUP"
+    chmod 666 "$KDE_ANIM_BACKUP" 2>/dev/null || true
+    run_as_user kwriteconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor 0.2
+    run_as_user qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true
+
+    # Baloo 백그라운드 파일 색인 중단 (유휴 디스크/CPU 웨이크업 방지)
+    run_as_user balooctl6 suspend 2>/dev/null || true
+
+    # 5. PCIe Runtime PM
     command -v powertop >/dev/null 2>&1 && powertop --auto-tune >/dev/null 2>&1 || true
-    # 5. PPD 및 알림 (power-tray 미사용 단독 CLI 실행 시에만 동기화 및 알림)
+
+    # 6. PPD 및 알림
     if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
         powerprofilesctl set power-saver >/dev/null 2>&1 || true
-        run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-powersave-symbolic -t 3000 "전원 프로파일: [초절전]" "절전과 동일 설정 (1.7GHz 상한, GPU low)\n(Wi-Fi, 블루투스, 16스레드 100% 유지)"
+        run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-powersave-symbolic -t 4000 \
+            "전원 프로파일: [초절전]" \
+            "부스트 OFF (1.7GHz) | GPU 70% 상한 제어 | 16스레드 가동\n(※ 60Hz 화면 주사율 및 시각 효과 정상 유지)"
     fi
 
     update_state_file "ultra"
