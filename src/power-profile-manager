@@ -165,10 +165,10 @@ restore_common_hardware() {
             echo "c" > "$gpu_dev/pp_od_clk_voltage" 2>/dev/null || true
         fi
     fi
-    # ryzenadj 전력 상한 복원 (설치되어 있을 경우 - 25W OEM 팩토리 최대 기본값)
+    # ryzenadj 전력 상한 복원 (설치되어 있을 경우 - 25W OEM 팩토리 최대 기본값 및 VRM 언락)
     local radj
     radj=$(find_ryzenadj)
-    [ -n "$radj" ] && "$radj" --stapm-limit=25000 --fast-limit=30000 --slow-limit=25000 --tctl-temp=95 >/dev/null 2>&1 || true
+    [ -n "$radj" ] && "$radj" --stapm-limit=25000 --fast-limit=30000 --slow-limit=25000 --tctl-temp=95 --vrm-current=44000 --vrmmax-current=70000 --vrmsoc-current=13000 --vrmsocmax-current=17000 --psi0-current=28000 >/dev/null 2>&1 || true
 
     # 강제 복구(Failsafe) 시 USB 장치 절전 해제
     if [ "$force_all" -eq 1 ]; then
@@ -273,9 +273,9 @@ set_performance() {
     done
     # 2. ThinkPad EC & ACPI
     [ -w /sys/firmware/acpi/platform_profile ] && echo performance > /sys/firmware/acpi/platform_profile
-    # 3. AMD SMU 하드웨어 TDP 락 (STAPM 25W, Fast 30W, Slow 25W, 온도 95°C)
+    # 3. AMD SMU 하드웨어 TDP 락 (STAPM 25W, Fast 30W, Slow 25W, 온도 95°C 및 VRM 언락)
     local radj; radj=$(find_ryzenadj)
-    [ -n "$radj" ] && "$radj" --stapm-limit=25000 --fast-limit=30000 --slow-limit=25000 --tctl-temp=95 >/dev/null 2>&1 || true
+    [ -n "$radj" ] && "$radj" --stapm-limit=25000 --fast-limit=30000 --slow-limit=25000 --tctl-temp=95 --vrm-current=44000 --vrmmax-current=70000 --vrmsoc-current=13000 --vrmsocmax-current=17000 --psi0-current=28000 >/dev/null 2>&1 || true
     # 4. GPU & Panel
     [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 0 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
     [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo auto > /sys/class/drm/card1/device/power_dpm_force_performance_level
@@ -298,9 +298,9 @@ set_balanced() {
     done
     # 2. ThinkPad EC & ACPI
     [ -w /sys/firmware/acpi/platform_profile ] && echo balanced > /sys/firmware/acpi/platform_profile
-    # 3. AMD SMU 하드웨어 TDP 락 (STAPM 18W, Fast 22W, Slow 18W, 온도 85°C)
+    # 3. AMD SMU 하드웨어 TDP 락 (STAPM 18W, Fast 22W, Slow 18W, 온도 85°C 및 균형 VRM)
     local radj; radj=$(find_ryzenadj)
-    [ -n "$radj" ] && "$radj" --stapm-limit=18000 --fast-limit=22000 --slow-limit=18000 --tctl-temp=85 >/dev/null 2>&1 || true
+    [ -n "$radj" ] && "$radj" --stapm-limit=18000 --fast-limit=22000 --slow-limit=18000 --tctl-temp=85 --vrm-current=35000 --vrmmax-current=55000 --vrmsoc-current=11000 --vrmsocmax-current=15000 --psi0-current=20000 >/dev/null 2>&1 || true
     # 4. GPU & Panel
     [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 1 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
     [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo auto > /sys/class/drm/card1/device/power_dpm_force_performance_level
@@ -325,9 +325,9 @@ set_save() {
     done
     # 2. ThinkPad EC: 저소음/저발열 프로파일
     [ -w /sys/firmware/acpi/platform_profile ] && echo low-power > /sys/firmware/acpi/platform_profile
-    # 3. AMD SMU 하드웨어 TDP 락 (STAPM 10W, Fast 12W, Slow 10W, 온도 75°C)
+    # 3. AMD SMU 하드웨어 TDP 락 (STAPM 10W, Fast 12W, Slow 10W, 온도 75°C 및 절전 VRM)
     local radj; radj=$(find_ryzenadj)
-    [ -n "$radj" ] && "$radj" --stapm-limit=10000 --fast-limit=12000 --slow-limit=10000 --tctl-temp=75 >/dev/null 2>&1 || true
+    [ -n "$radj" ] && "$radj" --stapm-limit=10000 --fast-limit=12000 --slow-limit=10000 --tctl-temp=75 --vrm-current=25000 --vrmmax-current=35000 --vrmsoc-current=9000 --vrmsocmax-current=12000 --psi0-current=15000 >/dev/null 2>&1 || true
     # 4. GPU & Panel: 적응형 백라이트 절전 2단계 (색 왜곡 없이 백라이트 절감)
     [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 2 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
     # GPU DPM은 auto로 두어 화면 렌더링에 필요한 클럭을 정상 공급
@@ -358,9 +358,9 @@ set_ultra() {
     # 2. ThinkPad EC: 저소음/저발열 프로파일 (패키지 TDP 억제)
     [ -w /sys/firmware/acpi/platform_profile ] && echo low-power > /sys/firmware/acpi/platform_profile
 
-    # 3. AMD SMU 하드웨어 TDP 락 (STAPM 4W, Fast 5W, Slow 4W, 온도 60°C)
+    # 3. AMD SMU 하드웨어 TDP 락 (STAPM 4W, Fast 5W, Slow 4W, 온도 60°C 및 VRM 위상 억제)
     local radj; radj=$(find_ryzenadj)
-    [ -n "$radj" ] && "$radj" --stapm-limit=4000 --fast-limit=5000 --slow-limit=4000 --tctl-temp=60 >/dev/null 2>&1 || true
+    [ -n "$radj" ] && "$radj" --stapm-limit=4000 --fast-limit=5000 --slow-limit=4000 --tctl-temp=60 --vrm-current=12000 --vrmmax-current=16000 --vrmsoc-current=6000 --vrmsocmax-current=9000 --psi0-current=8000 >/dev/null 2>&1 || true
 
     # 4. GPU 제한: 정확한 40% 상한 (640MHz Cap, 200MHz 바닥 락 절대 금지!)
     local gpu_dev="/sys/class/drm/card1/device"
@@ -442,8 +442,35 @@ set_ultra() {
     # Baloo 백그라운드 파일 색인 중단 (유휴 디스크/CPU 웨이크업 방지)
     run_as_user balooctl6 suspend 2>/dev/null || true
 
-    # 10. PCIe Runtime PM
-    command -v powertop >/dev/null 2>&1 && powertop --auto-tune >/dev/null 2>&1 || true
+    # 10. 메인보드 칩셋 및 주변 버스 하드웨어 전력 통제 (Motherboard Power Control)
+    # 10-1. PCIe 버스 모든 엔드포인트/브리지 Runtime PM D3hot 절전 강제
+    for pci_dev in /sys/bus/pci/devices/*/power/control; do
+        [ -w "$pci_dev" ] && echo auto > "$pci_dev" 2>/dev/null || true
+    done
+    for pci_d in /sys/bus/pci/devices/*/power/autosuspend_delay_ms; do
+        [ -w "$pci_d" ] && echo 100 > "$pci_d" 2>/dev/null || true
+    done
+    # 10-2. USB 서브시스템 및 내장 장치(지문인식기, 웹캠) Autosuspend
+    for usb_dev in /sys/bus/usb/devices/*/power/control; do
+        [ -w "$usb_dev" ] && echo auto > "$usb_dev" 2>/dev/null || true
+    done
+    for usb_delay in /sys/bus/usb/devices/*/power/autosuspend_delay_ms; do
+        [ -w "$usb_delay" ] && echo 1000 > "$usb_delay" 2>/dev/null || true
+    done
+    # 10-3. HD Audio 코덱 및 버스 컨트롤러 D3hot 슬립
+    [ -w /sys/module/snd_hda_intel/parameters/power_save ] && echo 1 > /sys/module/snd_hda_intel/parameters/power_save 2>/dev/null || true
+    [ -w /sys/module/snd_hda_intel/parameters/power_save_controller ] && echo Y > /sys/module/snd_hda_intel/parameters/power_save_controller 2>/dev/null || true
+    # 10-4. I2C / SMBus 런타임 절전
+    for i2c_dev in /sys/bus/i2c/devices/*/power/control; do
+        [ -w "$i2c_dev" ] && echo auto > "$i2c_dev" 2>/dev/null || true
+    done
+    # 10-5. 메인보드 타이머 및 인터럽트 웨이크업 최소화
+    [ -w /proc/sys/kernel/nmi_watchdog ] && echo 0 > /proc/sys/kernel/nmi_watchdog 2>/dev/null || true
+    [ -w /sys/module/workqueue/parameters/power_efficient ] && echo Y > /sys/module/workqueue/parameters/power_efficient 2>/dev/null || true
+    # 10-6. SATA/SCSI 링크 전원 최소화
+    for host in /sys/class/scsi_host/host*/link_power_management_policy; do
+        [ -w "$host" ] && echo min_power > "$host" 2>/dev/null || true
+    done
 
     # 11. 블루투스 하드웨어 라디오 완전 차단 (RF 방출 중단, 약 0.5W 추가 절감, 이전 상태 백업)
     local bt_blocked=0
@@ -540,6 +567,12 @@ show_status() {
             echo "  - AMD SMU TDP 락 : ${stapm_cur}W (STAPM 하드웨어 제한)"
         else
             echo "  - AMD SMU TDP    : ryzenadj 연동 가능"
+        fi
+        local tdc_cur edc_cur
+        tdc_cur=$("$radj" -i 2>/dev/null | grep -i "TDC LIMIT VDD" | awk -F'|' '{print $3}' | tr -d '[:space:]')
+        edc_cur=$("$radj" -i 2>/dev/null | grep -i "EDC LIMIT VDD" | awk -F'|' '{print $3}' | tr -d '[:space:]')
+        if [ -n "$tdc_cur" ] && [ -n "$edc_cur" ]; then
+            echo "  - 메인보드 VRM 락 : 지속 ${tdc_cur}A / 피크 ${edc_cur}A (전원부 위상 억제)"
         fi
     fi
     echo "=========================================="
@@ -721,9 +754,9 @@ set_restore() {
     [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 1 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
     [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo auto > /sys/class/drm/card1/device/power_dpm_force_performance_level
 
-    # 4. AMD SMU 하드웨어 TDP 팩토리 언락 (STAPM 25W, Fast 30W, Slow 25W, 온도 95°C)
+    # 4. AMD SMU 하드웨어 TDP 팩토리 언락 (STAPM 25W, Fast 30W, Slow 25W, 온도 95°C 및 VRM 언락)
     local radj; radj=$(find_ryzenadj)
-    [ -n "$radj" ] && "$radj" --stapm-limit=25000 --fast-limit=30000 --slow-limit=25000 --tctl-temp=95 >/dev/null 2>&1 || true
+    [ -n "$radj" ] && "$radj" --stapm-limit=25000 --fast-limit=30000 --slow-limit=25000 --tctl-temp=95 --vrm-current=44000 --vrmmax-current=70000 --vrmsoc-current=13000 --vrmsocmax-current=17000 --psi0-current=28000 >/dev/null 2>&1 || true
 
     # 5. PPD 동기화
     powerprofilesctl set balanced >/dev/null 2>&1 || true
