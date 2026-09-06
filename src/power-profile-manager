@@ -36,6 +36,17 @@ run_as_user() {
         "$@" 2>/dev/null || true
 }
 
+# 중복 실행 방지 락 (status 조회 제외, 동시 모드 변경 시 순차 실행 보장)
+if [ "$1" != "status" ]; then
+    LOCK_FILE="/run/lock/thinkpower-manager.lock"
+    [ ! -d "/run/lock" ] && LOCK_FILE="/tmp/thinkpower-manager.lock"
+    exec 200>"$LOCK_FILE"
+    if ! flock -w 5 200; then
+        echo "경고: 다른 전원 모드 변경 작업이 진행 중입니다. (중복 실행 방지)" >&2
+        exit 1
+    fi
+fi
+
 CACHE_DIR="${USER_HOME}/.cache"
 mkdir -p "$CACHE_DIR" 2>/dev/null || true
 STATE_FILE="${CACHE_DIR}/power_profile_mode"

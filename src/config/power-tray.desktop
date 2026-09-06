@@ -29,3 +29,4 @@ Categories=Utility;System;
 StartupNotify=false
 X-GNOME-Autostart-enabled=true
 X-KDE-autostart-after=panel
+X-systemd-skip=true

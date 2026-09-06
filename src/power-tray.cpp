@@ -16,6 +16,7 @@
 #include <pwd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/file.h>
 #include <dlfcn.h>
 #include <csignal>
 #include "l10n.hpp"
@@ -1099,6 +1100,41 @@ static void clean_exit_handler(int sig) {
     gtk_main_quit();
 }
 
+static int g_single_instance_lock_fd = -1;
+
+static bool acquire_single_instance_lock() {
+    std::string lock_path;
+    const char *xdg_runtime = getenv("XDG_RUNTIME_DIR");
+    if (xdg_runtime && xdg_runtime[0] != '\0') {
+        lock_path = std::string(xdg_runtime) + "/thinkpower-tray.lock";
+    } else {
+        const char *home = getenv("HOME");
+        if (home && home[0] != '\0') {
+            lock_path = std::string(home) + "/.cache/thinkpower-tray.lock";
+        } else {
+            lock_path = "/tmp/thinkpower-tray-" + std::to_string(getuid()) + ".lock";
+        }
+    }
+
+    g_single_instance_lock_fd = open(lock_path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+    if (g_single_instance_lock_fd < 0) {
+        return true;
+    }
+
+    if (flock(g_single_instance_lock_fd, LOCK_EX | LOCK_NB) != 0) {
+        close(g_single_instance_lock_fd);
+        g_single_instance_lock_fd = -1;
+        return false;
+    }
+
+    if (ftruncate(g_single_instance_lock_fd, 0) == 0) {
+        std::string pid_str = std::to_string(getpid()) + "\n";
+        ssize_t w = write(g_single_instance_lock_fd, pid_str.c_str(), pid_str.size());
+        (void)w;
+    }
+    return true;
+}
+
 int main(int argc, char **argv) {
     setlocale(LC_ALL, "");
 
@@ -1107,6 +1143,12 @@ int main(int argc, char **argv) {
             run_pgo_training(500000);
             return 0;
         }
+    }
+
+    // Prevent duplicate execution (Single-instance enforcement)
+    if (!acquire_single_instance_lock()) {
+        std::cout << "[ThinkPower] Another instance of power-tray is already running. Exiting cleanly." << std::endl;
+        return 0;
     }
 
     gtk_init(&argc, &argv);
