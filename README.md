@@ -1,7 +1,8 @@
 # ⚡ ThinkPower
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Latest Release](https://img.shields.io/github/v/release/jedclub/thinkpower?color=blue&logo=github)](https://github.com/jedclub/thinkpower/releases/latest)
 [![CI](https://github.com/jedclub/thinkpower/actions/workflows/ci.yml/badge.svg)](https://github.com/jedclub/thinkpower/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20(KDE%20Plasma%206%20Wayland)-orange.svg)]()
 [![Hardware](https://img.shields.io/badge/Target-ThinkPad%20%7C%20AMD%20Ryzen-red.svg)]()
 [![Language](https://img.shields.io/badge/Language-C%2B%2B17%20%7C%20AVX2-00599C.svg?logo=c%2B%2B)]()
@@ -160,7 +161,23 @@ thinkpower/
 
 ## 🚀 Installation
 
-### 1. Prerequisites
+### 📦 Pre-built Packages (Quick Install)
+
+Pre-compiled and optimized packages are automatically built and published with every release:
+
+👉 **[Download Latest Release (v1.0.0)](https://github.com/jedclub/thinkpower/releases/latest)**
+
+| Package Format | Target Distribution | Installation Command |
+| :--- | :--- | :--- |
+| **`.deb`** | Ubuntu, Debian, Linux Mint, Pop!_OS | `sudo apt install ./thinkpower_1.0.0_amd64.deb` |
+| **`.pkg.tar.zst`** | Arch Linux, CachyOS, Manjaro, EndeavourOS | `sudo pacman -U thinkpower-1.0.0-1-x86_64.pkg.tar.zst` |
+| **`.tar.gz`** | Generic Linux (Standalone binaries) | Extract & run `./install.sh` |
+
+---
+
+### 🛠️ Build from Source
+
+#### 1. Prerequisites
 
 Make sure the following build and runtime packages are installed on your distribution:
 
