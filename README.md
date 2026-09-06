@@ -3,7 +3,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20(KDE%20Plasma%206%20Wayland)-orange.svg)]()
 [![Hardware](https://img.shields.io/badge/Target-ThinkPad%20%7C%20AMD%20Ryzen-red.svg)]()
-[![Language](https://img.shields.io/badge/Python-3.10%2B-blue.svg)]()
+[![Language](https://img.shields.io/badge/Language-C%2B%2B17%20%7C%20AVX2-00599C.svg?logo=c%2B%2B)]()
+[![Build](https://img.shields.io/badge/Optimization-PGO%20%2B%20LTO-brightgreen.svg)]()
 [![Shell](https://img.shields.io/badge/Bash-Script-green.svg)]()
 
 > **Advanced 4-Stage Hardware Power Profile & Battery Management Tray for Linux**  

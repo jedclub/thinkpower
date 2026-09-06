@@ -84,3 +84,19 @@ cat /sys/module/pcie_aspm/parameters/policy
 cat /sys/class/power_supply/BAT0/power_now
 cat /sys/class/power_supply/BAT0/charge_control_end_threshold
 ```
+
+---
+
+## 6. Profile Flapping / Rapid Toggling on AC Connection
+
+### Symptom
+When connecting AC power, the system rapidly alternates between "Performance" and "Balanced" profiles every 2–4 seconds.
+
+### Root Cause & Architecture Solution
+1. **D-Bus Echo Loop**: `power-profiles-daemon` (PPD) and KDE PowerDevil emit `PropertiesChanged` over D-Bus when AC state changes. If the tray applet calls `powerprofilesctl set` in response to a D-Bus event, it generates a circular feedback echo.
+   - *Fix*: ThinkPower checks the trigger source (`user` vs `dbus`). When triggered by D-Bus, it updates local silicon parameters without re-invoking `powerprofilesctl`.
+2. **State File Permissions & Truncation**: When running under `sudo`, modifying state files without proper user ownership caused permission errors and fallback reads.
+   - *Fix*: State updates use atomic writes (`.tmp` -> `rename`) with `0666` permissions and explicit user ownership.
+3. **Redundant Display Resets**: Calling `kscreen-doctor` while already at 60Hz causes DRM display pipeline resets (`amdgpu: failed to write reg 28b4`).
+   - *Fix*: Display mode switches are strictly gated to transitions entering or leaving `ultra` mode.
+4. **Debounce / Cooldown Filter**: Profile transitions from external D-Bus events are rate-limited with a 1.5-second cooldown window to suppress rapid electrical chatter during USB-PD negotiation.
