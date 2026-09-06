@@ -1,6 +1,6 @@
 # Maintainer: ThinkPower Contributors
 pkgname=thinkpower
-pkgver=1.0.0
+pkgver=1.1.0
 pkgrel=1
 pkgdesc="Advanced Battery & 4-Stage Power Management Tray for ThinkPad (KDE Plasma, AMD Ryzen)"
 arch=('x86_64')

@@ -1,4 +1,5 @@
 CXX ?= g++
+VERSION ?= 1.1.0
 
 # Base Architecture & Native SIMD Flags for AMD Ryzen (Zen 2 Renoir)
 MARCH ?= native
@@ -73,21 +74,21 @@ pkg:
 
 deb: $(TARGET)
 	@echo "==> Building Debian/Ubuntu .deb package..."
-	@./packaging/build-deb.sh 1.0.0 amd64
+	@./packaging/build-deb.sh $(VERSION) amd64
 
 release: pgo pkg deb
 	@echo "==> Packaging standalone universal distribution tarball..."
-	@mkdir -p release/thinkpower-1.0.0
-	@cp -a bin src packaging install.sh uninstall.sh LICENSE README.md Makefile CMakeLists.txt release/thinkpower-1.0.0/
-	@tar -czf release/thinkpower-1.0.0-linux-x86_64.tar.gz -C release thinkpower-1.0.0
-	@rm -rf release/thinkpower-1.0.0
+	@mkdir -p release/thinkpower-$(VERSION)
+	@cp -a bin src packaging install.sh uninstall.sh LICENSE README.md Makefile CMakeLists.txt release/thinkpower-$(VERSION)/
+	@tar -czf release/thinkpower-$(VERSION)-linux-x86_64.tar.gz -C release thinkpower-$(VERSION)
+	@rm -rf release/thinkpower-$(VERSION)
 	@mv -f thinkpower-*.pkg.tar.zst release/ 2>/dev/null || true
 	@cd release && sha256sum thinkpower* > SHA256SUMS.txt
 	@echo "========================================================="
 	@echo "  🎁 Release Artifacts Generated in $(CURDIR)/release:"
-	@echo "    - Arch/CachyOS Package : release/thinkpower-1.0.0-1-x86_64.pkg.tar.zst"
-	@echo "    - Debian/Ubuntu Package: release/thinkpower_1.0.0_amd64.deb"
-	@echo "    - Standalone Tarball   : release/thinkpower-1.0.0-linux-x86_64.tar.gz"
+	@echo "    - Arch/CachyOS Package : release/thinkpower-$(VERSION)-1-x86_64.pkg.tar.zst"
+	@echo "    - Debian/Ubuntu Package: release/thinkpower_$(VERSION)_amd64.deb"
+	@echo "    - Standalone Tarball   : release/thinkpower-$(VERSION)-linux-x86_64.tar.gz"
 	@echo "    - SHA256 Checksums     : release/SHA256SUMS.txt"
 	@echo "========================================================="
 

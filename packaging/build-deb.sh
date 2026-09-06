@@ -21,12 +21,16 @@ mkdir -p "$STAGE_DIR/usr/share/licenses/${PKG_NAME}"
 mkdir -p "$OUT_DIR"
 
 # 1. Install files
+mkdir -p "$STAGE_DIR/lib/udev/rules.d"
 install -m 755 bin/power-tray "$STAGE_DIR/usr/bin/power-tray"
 install -m 755 src/power-profile-manager "$STAGE_DIR/usr/bin/power-profile-manager"
+ln -sf power-profile-manager "$STAGE_DIR/usr/bin/tp-ppm"
 install -m 440 src/config/99-power-profile-manager "$STAGE_DIR/etc/sudoers.d/99-power-profile-manager"
+install -m 644 src/config/98-thinkpower-ac.rules "$STAGE_DIR/lib/udev/rules.d/98-thinkpower-ac.rules"
 install -m 644 packaging/power-tray.service "$STAGE_DIR/usr/lib/systemd/user/power-tray.service"
 install -m 644 packaging/power-tray.desktop "$STAGE_DIR/etc/xdg/autostart/power-tray.desktop"
 install -m 644 packaging/power-ultra.desktop "$STAGE_DIR/usr/share/applications/power-ultra.desktop"
+install -m 644 packaging/power-restore.desktop "$STAGE_DIR/usr/share/applications/power-restore.desktop"
 install -m 644 LICENSE "$STAGE_DIR/usr/share/licenses/${PKG_NAME}/LICENSE"
 install -m 644 README.md "$STAGE_DIR/usr/share/doc/${PKG_NAME}/README.md"
 
