@@ -149,6 +149,10 @@ private:
     std::map<std::string, GtkWidget*> radio_items;
 
     bool updating_ui = false;
+    std::string current_mode = "balanced";
+    gint64 last_switch_time_us = 0;
+    std::string pending_dbus_expected_profile;
+
     GDBusConnection *dbus_conn = nullptr;
     guint dbus_sub_id = 0;
     PowerFilterSIMD power_filter;
@@ -164,6 +168,9 @@ struct RadioCallbackData {
 // ==============================================================================
 
 PowerTrayApp::PowerTrayApp() {
+    current_mode = get_current_mode();
+    if (current_mode.empty()) current_mode = "balanced";
+
     indicator = app_indicator_new(
         APPINDICATOR_ID,
         "battery-profile-balanced-symbolic",
@@ -236,17 +243,27 @@ std::string PowerTrayApp::get_current_mode() {
     if (file.is_open()) {
         std::string mode;
         file >> mode;
-        if (!mode.empty()) return mode;
+        if (!mode.empty()) {
+            current_mode = mode;
+            return current_mode;
+        }
     }
+    if (!current_mode.empty()) return current_mode;
     return "balanced";
 }
 
 void PowerTrayApp::set_current_mode(const std::string &mode) {
+    current_mode = mode;
     std::string dir = get_cache_dir();
     mkdir(dir.c_str(), 0755);
-    std::ofstream file(get_state_file_path());
+    std::string path = get_state_file_path();
+    std::string tmp_path = path + ".tmp";
+    std::ofstream file(tmp_path);
     if (file.is_open()) {
         file << mode << std::endl;
+        file.close();
+        chmod(tmp_path.c_str(), 0666);
+        rename(tmp_path.c_str(), path.c_str());
     }
 }
 
@@ -539,7 +556,10 @@ void PowerTrayApp::update_state_ui() {
     BatteryInfo bat = get_battery_info();
 
     if (radio_items.count(mode) && radio_items[mode]) {
-        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(radio_items[mode]), TRUE);
+        GtkCheckMenuItem *chk = GTK_CHECK_MENU_ITEM(radio_items[mode]);
+        if (!gtk_check_menu_item_get_active(chk)) {
+            gtk_check_menu_item_set_active(chk, TRUE);
+        }
     }
 
     update_icon_label_and_tooltip(mode, bat);
@@ -578,30 +598,33 @@ void PowerTrayApp::update_state_ui() {
 }
 
 void PowerTrayApp::switch_mode(const std::string &mode_key, const std::string &trigger_source) {
+    if (mode_key == current_mode) {
+        return;
+    }
+
+    gint64 now = g_get_monotonic_time();
+    // Cooldown debouncing: ignore rapid toggling within 1.5 seconds if coming from D-Bus
+    if (trigger_source == "dbus" && (now - last_switch_time_us < 1500000)) {
+        return;
+    }
+    last_switch_time_us = now;
+
     set_current_mode(mode_key);
     update_state_ui();
 
-    if (mode_key == "ultra") {
-        g_spawn_command_line_async("kscreen-doctor output.1.mode.2", nullptr);
-        g_spawn_command_line_async("balooctl6 suspend", nullptr);
-        if (trigger_source == "user") {
+    if (trigger_source == "user") {
+        if (mode_key == "ultra") {
             notify_user(
                 "전원 프로파일: [⚡ 극한 초절전 ON]",
                 "시스템: 절전 모드 | 1.4GHz 고정 | 48Hz 다운클럭 | 백라이트MAX\n(※ Wi-Fi와 블루투스는 정상 유지됩니다)",
                 "battery-low"
             );
-        }
-    } else {
-        g_spawn_command_line_async("kscreen-doctor output.1.mode.1", nullptr);
-        g_spawn_command_line_async("balooctl6 resume", nullptr);
-        if (trigger_source == "user") {
-            if (mode_key == "save") {
-                notify_user("전원 프로파일: [스마트 절전]", "시스템: 절전 모드 | 1.7GHz 상한 및 백라이트 최적화\n(Wi-Fi, BT, 16스레드 100% 정상 작동)", "battery-profile-powersave-symbolic");
-            } else if (mode_key == "balanced") {
-                notify_user("전원 프로파일: [균형]", "시스템: 균형 모드 | 표준 동적 클럭", "battery-profile-balanced-symbolic");
-            } else if (mode_key == "performance") {
-                notify_user("전원 프로파일: [성능]", "시스템: 성능 모드 | 4.1GHz CPU 부스트 활성화", "battery-profile-performance-symbolic");
-            }
+        } else if (mode_key == "save") {
+            notify_user("전원 프로파일: [스마트 절전]", "시스템: 절전 모드 | 1.7GHz 상한 및 백라이트 최적화\n(Wi-Fi, BT, 16스레드 100% 정상 작동)", "battery-profile-powersave-symbolic");
+        } else if (mode_key == "balanced") {
+            notify_user("전원 프로파일: [균형]", "시스템: 균형 모드 | 표준 동적 클럭", "battery-profile-balanced-symbolic");
+        } else if (mode_key == "performance") {
+            notify_user("전원 프로파일: [성능]", "시스템: 성능 모드 | 4.1GHz CPU 부스트 활성화", "battery-profile-performance-symbolic");
         }
     }
 
@@ -609,17 +632,24 @@ void PowerTrayApp::switch_mode(const std::string &mode_key, const std::string &t
     if (mode_key == "performance") os_target = "performance";
     else if (mode_key == "save" || mode_key == "ultra") os_target = "power-saver";
 
-    std::string cmd_ppd = "powerprofilesctl set " + os_target;
-    g_spawn_command_line_async(cmd_ppd.c_str(), nullptr);
+    // Only synchronize to PPD D-Bus when user-initiated from tray menu to prevent echo loops
+    if (trigger_source != "dbus") {
+        pending_dbus_expected_profile = os_target;
+        std::string cmd_ppd = "powerprofilesctl set " + os_target;
+        g_spawn_command_line_async(cmd_ppd.c_str(), nullptr);
+    }
 
-    std::string cmd_mgr = "sudo -n " + get_manager_bin() + " " + mode_key;
+    // Call hardware manager with THINKPOWER_INTERNAL=1 to prevent it from issuing duplicate PPD calls
+    std::string cmd_mgr = "env THINKPOWER_INTERNAL=1 sudo -n " + get_manager_bin() + " " + mode_key;
     g_spawn_command_line_async(cmd_mgr.c_str(), nullptr);
 }
 
 void PowerTrayApp::on_radio_toggled(GtkCheckMenuItem *item, const std::string &mode_key) {
     if (updating_ui) return;
     if (gtk_check_menu_item_get_active(item)) {
-        switch_mode(mode_key, "user");
+        if (mode_key != current_mode) {
+            switch_mode(mode_key, "user");
+        }
     }
 }
 
@@ -694,9 +724,20 @@ static void on_dbus_signal_static(
 }
 
 void PowerTrayApp::on_dbus_signal(const std::string &new_os_profile) {
-    std::string current_mode = get_current_mode();
-    std::string target_mode = current_mode;
+    if (new_os_profile.empty()) return;
 
+    // Suppress echo if this signal matches our own recent user-triggered powerprofilesctl command
+    if (!pending_dbus_expected_profile.empty() && new_os_profile == pending_dbus_expected_profile) {
+        pending_dbus_expected_profile.clear();
+        return;
+    }
+
+    gint64 now = g_get_monotonic_time();
+    if (now - last_switch_time_us < 1500000) {
+        return;
+    }
+
+    std::string target_mode = current_mode;
     if (new_os_profile == "performance") {
         target_mode = "performance";
     } else if (new_os_profile == "balanced") {

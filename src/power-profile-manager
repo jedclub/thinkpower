@@ -41,9 +41,21 @@ mkdir -p "$CACHE_DIR" 2>/dev/null || true
 STATE_FILE="${CACHE_DIR}/power_profile_mode"
 KBD_BACKUP="${CACHE_DIR}/prev_kbd_backlight"
 
+update_state_file() {
+    local mode="$1"
+    echo "$mode" > "${STATE_FILE}.tmp"
+    chown "$REAL_USER:" "${STATE_FILE}.tmp" 2>/dev/null || true
+    chmod 666 "${STATE_FILE}.tmp" 2>/dev/null || true
+    mv -f "${STATE_FILE}.tmp" "$STATE_FILE"
+}
+
 if [ ! -f "$STATE_FILE" ]; then
     echo "balanced" > "$STATE_FILE"
     chown "$REAL_USER:" "$STATE_FILE" 2>/dev/null || true
+    chmod 666 "$STATE_FILE" 2>/dev/null || true
+else
+    chown "$REAL_USER:" "$STATE_FILE" 2>/dev/null || true
+    chmod 666 "$STATE_FILE" 2>/dev/null || true
 fi
 
 restore_common_hardware() {
@@ -58,10 +70,15 @@ restore_common_hardware() {
     echo on > /sys/devices/system/cpu/smt/control 2>/dev/null || true
     # ryzenadj 전력 상한 복원 (설치되어 있을 경우)
     command -v ryzenadj >/dev/null 2>&1 && ryzenadj --stapm-limit=25000 --fast-limit=30000 --slow-limit=25000 >/dev/null 2>&1 || true
-    # 화면 60Hz 복원
-    run_as_user kscreen-doctor output.1.mode.1
-    # 파일 인덱서 재개
-    run_as_user balooctl6 resume
+
+    # 이전 모드가 ultra였던 경우에만 60Hz 화면 복원 및 파일 색인 재개 (불필요한 GPU 디스플레이 리셋 차단)
+    local prev_mode
+    prev_mode=$(cat "$STATE_FILE" 2>/dev/null || echo "balanced")
+    if [ "$prev_mode" = "ultra" ]; then
+        run_as_user kscreen-doctor output.1.mode.1
+        run_as_user balooctl6 resume
+    fi
+
     # 키보드 백라이트 이전 상태 자동 복원
     if [ -f "$KBD_BACKUP" ]; then
         PREV_KBD=$(cat "$KBD_BACKUP" 2>/dev/null || echo "1")
@@ -86,10 +103,12 @@ set_performance() {
     # 3. GPU & Panel
     [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 0 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
     [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo auto > /sys/class/drm/card1/device/power_dpm_force_performance_level
-    # 4. PPD
-    powerprofilesctl set performance >/dev/null 2>&1 || true
+    # 4. PPD (power-tray 미사용 단독 CLI 실행 시에만 동기화)
+    if [ -z "$THINKPOWER_INTERNAL" ]; then
+        powerprofilesctl set performance >/dev/null 2>&1 || true
+    fi
 
-    echo "performance" > "$STATE_FILE"
+    update_state_file "performance"
     run_as_user notify-send -i battery-profile-performance-symbolic -t 3000 "전원 프로파일: [성능]" "CPU 부스트(4.1GHz) 활성화, 최대 성능"
 }
 
@@ -109,10 +128,12 @@ set_balanced() {
     [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo auto > /sys/class/drm/card1/device/power_dpm_force_performance_level
     # 4. PCIe Runtime PM
     command -v powertop >/dev/null 2>&1 && powertop --auto-tune >/dev/null 2>&1 || true
-    # 5. PPD
-    powerprofilesctl set balanced >/dev/null 2>&1 || true
+    # 5. PPD (power-tray 미사용 단독 CLI 실행 시에만 동기화)
+    if [ -z "$THINKPOWER_INTERNAL" ]; then
+        powerprofilesctl set balanced >/dev/null 2>&1 || true
+    fi
 
-    echo "balanced" > "$STATE_FILE"
+    update_state_file "balanced"
     run_as_user notify-send -i battery-profile-balanced-symbolic -t 3000 "전원 프로파일: [균형]" "표준 동적 클럭 및 전력 관리"
 }
 
@@ -132,10 +153,12 @@ set_save() {
     [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo low > /sys/class/drm/card1/device/power_dpm_force_performance_level
     # 4. PCIe Runtime PM
     command -v powertop >/dev/null 2>&1 && powertop --auto-tune >/dev/null 2>&1 || true
-    # 5. PPD
-    powerprofilesctl set power-saver >/dev/null 2>&1 || true
+    # 5. PPD (power-tray 미사용 단독 CLI 실행 시에만 동기화)
+    if [ -z "$THINKPOWER_INTERNAL" ]; then
+        powerprofilesctl set power-saver >/dev/null 2>&1 || true
+    fi
 
-    echo "save" > "$STATE_FILE"
+    update_state_file "save"
     run_as_user notify-send -i battery-profile-powersave-symbolic -t 3000 "전원 프로파일: [스마트 절전]" "부스트 OFF(1.7GHz 상한) 및 발열 억제\n(Wi-Fi, 블루투스, 16스레드 100% 유지)"
 }
 
@@ -188,10 +211,12 @@ set_ultra() {
     # - Baloo 파일 색인 중단 (CPU/SSD 불필요한 웨이크업 원천 방지)
     run_as_user balooctl6 suspend
 
-    # [5. PPD 동기화]
-    powerprofilesctl set power-saver >/dev/null 2>&1 || true
+    # [5. PPD 동기화] (power-tray 미사용 단독 CLI 실행 시에만 동기화)
+    if [ -z "$THINKPOWER_INTERNAL" ]; then
+        powerprofilesctl set power-saver >/dev/null 2>&1 || true
+    fi
 
-    echo "ultra" > "$STATE_FILE"
+    update_state_file "ultra"
     run_as_user notify-send -u critical -i battery-low -t 5000 \
         "전원 프로파일: [⚡ 극한 초절전 ON]" \
         "1.4GHz 고정 | 48Hz | ASPM MAX | 8C전용 | 백라이트MAX\n(※ Wi-Fi 및 블루투스는 정상 유지됩니다)"
