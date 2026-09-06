@@ -562,15 +562,15 @@ show_status() {
     radj=$(find_ryzenadj)
     if [ -n "$radj" ] && [ "$EUID" -eq 0 ]; then
         local stapm_cur
-        stapm_cur=$("$radj" -i 2>/dev/null | grep -i "STAPM LIMIT" | awk -F'|' '{print $3}' | tr -d '[:space:]')
+        stapm_cur=$("$radj" -i 2>/dev/null | grep -i "STAPM LIMIT" | head -n 1 | awk -F'|' '{print $3}' | tr -d '[:space:]')
         if [ -n "$stapm_cur" ]; then
             echo "  - AMD SMU TDP 락 : ${stapm_cur}W (STAPM 하드웨어 제한)"
         else
             echo "  - AMD SMU TDP    : ryzenadj 연동 가능"
         fi
         local tdc_cur edc_cur
-        tdc_cur=$("$radj" -i 2>/dev/null | grep -i "TDC LIMIT VDD" | awk -F'|' '{print $3}' | tr -d '[:space:]')
-        edc_cur=$("$radj" -i 2>/dev/null | grep -i "EDC LIMIT VDD" | awk -F'|' '{print $3}' | tr -d '[:space:]')
+        tdc_cur=$("$radj" -i 2>/dev/null | grep -i "TDC LIMIT VDD" | head -n 1 | awk -F'|' '{print $3}' | tr -d '[:space:]')
+        edc_cur=$("$radj" -i 2>/dev/null | grep -i "EDC LIMIT VDD" | head -n 1 | awk -F'|' '{print $3}' | tr -d '[:space:]')
         if [ -n "$tdc_cur" ] && [ -n "$edc_cur" ]; then
             echo "  - 메인보드 VRM 락 : 지속 ${tdc_cur}A / 피크 ${edc_cur}A (전원부 위상 억제)"
         fi
