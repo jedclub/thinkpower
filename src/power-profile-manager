@@ -755,17 +755,24 @@ show_status() {
     ASPM=$(cat /sys/module/pcie_aspm/parameters/policy 2>/dev/null | grep -o '\[.*\]' | tr -d '[]' || echo "?")
     VM_LM=$(cat /proc/sys/vm/laptop_mode 2>/dev/null || echo "?")
     KBD=$(cat /sys/class/leds/tpacpi::kbd_backlight/brightness 2>/dev/null || echo "?")
-    DISP=$(cat /sys/class/backlight/*/brightness 2>/dev/null | head -n1 || echo "?")
-    DISP_MAX=$(cat /sys/class/backlight/*/max_brightness 2>/dev/null | head -n1 || echo "100")
-    DISP_PCT=$(( DISP * 100 / DISP_MAX ))
+    DISP=$(cat /sys/class/backlight/*/brightness 2>/dev/null | head -n1 || echo "")
+    DISP="${DISP:-0}"
+    DISP_MAX=$(cat /sys/class/backlight/*/max_brightness 2>/dev/null | head -n1 || echo "")
+    DISP_MAX="${DISP_MAX:-100}"
+    local DISP_PCT=0
+    if [ "$DISP_MAX" -gt 0 ] 2>/dev/null; then
+        DISP_PCT=$(( DISP * 100 / DISP_MAX ))
+    fi
     CORES_ONLINE=$(cat /sys/devices/system/cpu/cpu*/online 2>/dev/null | grep -c "^1$")
+    CORES_ONLINE="${CORES_ONLINE:-0}"
     # cpu0 is always online, so add 1
     CORES_ONLINE=$(( CORES_ONLINE + 1 ))
     GPU_DPM=$(cat /sys/class/drm/card1/device/power_dpm_force_performance_level 2>/dev/null || echo "?")
     GPU_CUR=$(cat /sys/class/drm/card1/device/pp_dpm_sclk 2>/dev/null | grep '\*' | awk '{print $2}' || echo "?")
     GPU_MAX=$(cat /sys/class/drm/card1/device/pp_od_clk_voltage 2>/dev/null | grep -E '^1:' | awk '{print $2}' || echo "1600Mhz")
     POWER=$(cat /sys/class/power_supply/BAT0/power_now 2>/dev/null || echo "0")
-    POWER_W=$(awk "BEGIN {printf \"%.2f\", $POWER / 1000000}" 2>/dev/null || echo "$POWER uW")
+    POWER="${POWER:-0}"
+    POWER_W=$(awk -v p="$POWER" "BEGIN {printf \"%.2f\", p / 1000000}" 2>/dev/null || echo "0.00")
 
     echo "=========================================="
     echo "  현재 전원 모드 : $CURRENT"
