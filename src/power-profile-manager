@@ -119,8 +119,12 @@ restore_common_hardware() {
     # VM 및 디스크 플러시 주기 원복
     echo 0 > /proc/sys/vm/laptop_mode 2>/dev/null || true
     echo 500 > /proc/sys/vm/dirty_writeback_centisecs 2>/dev/null || true
+    echo 3000 > /proc/sys/vm/dirty_expire_centisecs 2>/dev/null || true
+    echo 100 > /proc/sys/vm/vfs_cache_pressure 2>/dev/null || true
     echo 150 > /proc/sys/vm/swappiness 2>/dev/null || true
     [ -w /sys/kernel/mm/transparent_hugepage/enabled ] && echo always > /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || true
+    [ -w /sys/kernel/mm/transparent_hugepage/defrag ] && echo madvise > /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null || true
+    [ -w /sys/kernel/mm/transparent_hugepage/khugepaged/defrag ] && echo 1 > /sys/kernel/mm/transparent_hugepage/khugepaged/defrag 2>/dev/null || true
     # CPU Idle 거버너 및 타이머 원복
     [ -w /sys/devices/system/cpu/cpuidle/current_governor ] && echo menu > /sys/devices/system/cpu/cpuidle/current_governor 2>/dev/null || true
     for p in /sys/devices/system/cpu/cpu*/cpuidle/state0/disable; do
@@ -408,17 +412,24 @@ set_ultra() {
     # 6. PCIe ASPM (Active State Power Management) 절전 정책 적용
     [ -w /sys/module/pcie_aspm/parameters/policy ] && echo powersave > /sys/module/pcie_aspm/parameters/policy 2>/dev/null || true
 
-    # 7. 디스크 I/O Flush 지연 (15초, NVMe SSD APST 딥슬립 유지 극대화)
-    [ -w /proc/sys/vm/dirty_writeback_centisecs ] && echo 1500 > /proc/sys/vm/dirty_writeback_centisecs 2>/dev/null || true
+    # 7. SSD(NVMe) 극한 절전: 커널 랩톱 모드(5), 디스크 Flush 30초/60초 지연, VFS 캐시 압력 50
+    #    (삼성 980 PRO NVMe 컨트롤러가 깨어나지 않고 L1.2 서브스테이트(5mW) 수면을 유지)
+    echo 5 > /proc/sys/vm/laptop_mode 2>/dev/null || true
+    echo 3000 > /proc/sys/vm/dirty_writeback_centisecs 2>/dev/null || true
+    echo 6000 > /proc/sys/vm/dirty_expire_centisecs 2>/dev/null || true
+    echo 50 > /proc/sys/vm/vfs_cache_pressure 2>/dev/null || true
 
-    # 8. CPU Idle(teo 거버너, POLL 비활성화, 타이머 마이그레이션 차단) 및 RAM 딥슬립(THP madvise, Swappiness 60)
+    # 8. CPU Idle(teo 거버너, POLL 비활성화, 타이머 마이그레이션 차단) 및 RAM 딥슬립(THP madvise/defrag never, Swappiness 60)
     [ -w /sys/devices/system/cpu/cpuidle/current_governor ] && echo teo > /sys/devices/system/cpu/cpuidle/current_governor 2>/dev/null || true
     for p in /sys/devices/system/cpu/cpu*/cpuidle/state0/disable; do
         [ -w "$p" ] && echo 1 > "$p" 2>/dev/null || true
     done
     [ -w /proc/sys/kernel/timer_migration ] && echo 0 > /proc/sys/kernel/timer_migration 2>/dev/null || true
     [ -w /sys/kernel/mm/transparent_hugepage/enabled ] && echo madvise > /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || true
+    [ -w /sys/kernel/mm/transparent_hugepage/defrag ] && echo never > /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null || true
+    [ -w /sys/kernel/mm/transparent_hugepage/khugepaged/defrag ] && echo 0 > /sys/kernel/mm/transparent_hugepage/khugepaged/defrag 2>/dev/null || true
     [ -w /proc/sys/vm/swappiness ] && echo 60 > /proc/sys/vm/swappiness 2>/dev/null || true
+    echo 1 > /proc/sys/vm/compact_memory 2>/dev/null || true
 
     # 9. KDE Plasma 안전 최적화 (24FPS 차단/블러 언로드 금지! 60Hz 화면 주사율 100% 유지)
     local cur_anim
