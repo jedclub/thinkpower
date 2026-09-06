@@ -36,6 +36,32 @@ Default Linux desktop power managers only set high-level ACPI platform hints. Un
 
 ---
 
+## 🖥️ UI & Desktop Integration
+
+<div align="center">
+  <img src="docs/images/panel-preview.png" alt="ThinkPower Panel Preview" width="750" />
+  <p><em>Real-time battery percentage, charging/discharging wattage, and status indicator on the KDE Plasma panel.</em></p>
+</div>
+
+<div align="center">
+  <table border="0">
+    <tr>
+      <td align="center" width="55%">
+        <img src="docs/images/tray-hud-tooltip.png" alt="ThinkPower HUD Tooltip" width="100%" />
+        <br />
+        <em>HUD Tooltip with live wattage, battery health, threshold time, and Bluetooth peripherals</em>
+      </td>
+      <td align="center" width="45%">
+        <img src="docs/images/tray-menu.png" alt="ThinkPower Context Menu" width="100%" />
+        <br />
+        <em>Native context menu with 4-stage profile selection & Quick Actions</em>
+      </td>
+    </tr>
+  </table>
+</div>
+
+---
+
 ## ✨ Key Features
 
 - 🔋 **All-In-One Battery Tray Replacement**: Displays live battery %, charging/discharging wattage (`+`/`-`), and accurate remaining time directly on your KDE taskbar panel.
@@ -103,13 +129,17 @@ graph TD
 
 ```
 thinkpower/
+├── .github/workflows/               # GitHub Actions CI/CD workflows (PGO + multi-packaging)
 ├── .gitignore
 ├── LICENSE                          # MIT License
 ├── README.md                        # Master Documentation
-├── Makefile                         # High-performance native build script
+├── Makefile                         # High-performance native build script (PGO/LTO/AVX2)
 ├── CMakeLists.txt                   # Standard CMake configuration
+├── PKGBUILD                         # Arch Linux & CachyOS native package recipe
 ├── install.sh                       # One-Click Builder & Installer
 ├── uninstall.sh                     # Clean Uninstaller
+├── packaging/                       # Distribution packaging tools (.deb, .pkg.tar.zst)
+│   └── build-deb.sh                 # High-performance .deb builder
 ├── src/
 │   ├── power-tray.cpp               # Native C++17 AyatanaAppIndicator Tray Applet
 │   ├── power-profile-manager        # Privileged Hardware Silicon Tuner
@@ -119,6 +149,7 @@ thinkpower/
 │       ├── power-ultra.desktop      # KDE Application Launcher shortcut
 │       └── 99-power-profile-manager # Sudoers passwordless rule
 └── docs/
+    ├── images/                      # High-DPI screenshots & UI previews
     ├── 01-ARCHITECTURE.md           # Deep dive into dual-layer state machine
     ├── 02-HARDWARE-TUNING.md        # Sysfs registers, ASPM, ABM, and CPU floors
     ├── 03-FEATURES-GUIDE.md         # Comprehensive features and usage guide
