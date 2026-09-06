@@ -326,7 +326,7 @@ set_save() {
 }
 
 set_ultra() {
-    echo "▶ [초절전 모드] 안전 적용 중 (16스레드 유지, CPU 1.4GHz, SMU 6W 하드웨어 락, GPU 50% 제한)..."
+    echo "▶ [초절전 모드] 안전 적용 중 (16스레드 유지, CPU 1.4GHz, SMU 4W 하드웨어 락, GPU 50% 제한)..."
     restore_common_hardware
     update_state_file "ultra"
 
@@ -342,9 +342,9 @@ set_ultra() {
     # 2. ThinkPad EC: 저소음/저발열 프로파일 (패키지 TDP 억제)
     [ -w /sys/firmware/acpi/platform_profile ] && echo low-power > /sys/firmware/acpi/platform_profile
 
-    # 3. AMD SMU 하드웨어 TDP 락 (STAPM 6W, Fast 8W, Slow 6W, 온도 65°C)
+    # 3. AMD SMU 하드웨어 TDP 락 (STAPM 4W, Fast 5W, Slow 4W, 온도 60°C)
     local radj; radj=$(find_ryzenadj)
-    [ -n "$radj" ] && "$radj" --stapm-limit=6000 --fast-limit=8000 --slow-limit=6000 --tctl-temp=65 >/dev/null 2>&1 || true
+    [ -n "$radj" ] && "$radj" --stapm-limit=4000 --fast-limit=5000 --slow-limit=4000 --tctl-temp=60 >/dev/null 2>&1 || true
 
     # 4. GPU 제한: 정확한 50% 상한 (800MHz Cap, 200MHz 바닥 락 절대 금지!)
     local gpu_dev="/sys/class/drm/card1/device"
@@ -427,7 +427,7 @@ set_ultra() {
         powerprofilesctl set power-saver >/dev/null 2>&1 || true
         run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-powersave-symbolic -t 4000 \
             "전원 프로파일: [초절전]" \
-            "CPU 1.4GHz+teo | RAM/THP 절전 | 화면 20% | 키보드 OFF | GPU 50%\n(※ 16스레드 및 60Hz 정상 가동)"
+            "CPU 1.4GHz+teo | SMU 4W 하드웨어 락 | 화면 20% | 키보드 OFF | GPU 50%\n(※ 16스레드 및 60Hz 정상 가동)"
     fi
 }
 
