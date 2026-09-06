@@ -25,7 +25,7 @@ PKGS = ayatana-appindicator3-0.1 gtk+-3.0 gio-2.0
 GTK_CFLAGS = $(shell $(PKG_CONFIG) --cflags $(PKGS))
 GTK_LIBS = $(shell $(PKG_CONFIG) --libs $(PKGS))
 
-LDFLAGS += -Wl,-O1,--sort-common,--as-needed,-z,relro,-z,now
+LDFLAGS += -Wl,-O1,--sort-common,--as-needed,-z,relro,-z,now -ldl
 
 BIN_DIR = bin
 PROFILE_DIR = $(CURDIR)/build/pgo_data

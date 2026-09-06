@@ -15,8 +15,8 @@
 #include <unistd.h>
 #include <pwd.h>
 #include <fcntl.h>
-#include <sys/types.h>
 #include <sys/stat.h>
+#include <dlfcn.h>
 #include "l10n.hpp"
 
 #if defined(__AVX2__)
@@ -609,7 +609,14 @@ void PowerTrayApp::update_icon_label_and_tooltip(const std::string &mode, const 
         if (i + 1 < body_elements.size()) tooltip_body += "\n";
     }
 
-    app_indicator_set_tooltip_full(indicator, icon_buf, tooltip_title.c_str(), tooltip_body.c_str());
+    typedef void (*set_tooltip_full_fn)(AppIndicator*, const gchar*, const gchar*, const gchar*);
+    static set_tooltip_full_fn p_set_tooltip_full = (set_tooltip_full_fn)dlsym(RTLD_DEFAULT, "app_indicator_set_tooltip_full");
+    if (p_set_tooltip_full) {
+        p_set_tooltip_full(indicator, icon_buf, tooltip_title.c_str(), tooltip_body.c_str());
+    } else {
+        std::string full_title = tooltip_title + "\n" + tooltip_body;
+        app_indicator_set_title(indicator, full_title.c_str());
+    }
 }
 
 void PowerTrayApp::update_state_ui() {
