@@ -639,8 +639,8 @@ void PowerTrayApp::switch_mode(const std::string &mode_key, const std::string &t
         g_spawn_command_line_async(cmd_ppd.c_str(), nullptr);
     }
 
-    // Call hardware manager with THINKPOWER_INTERNAL=1 to prevent it from issuing duplicate PPD calls
-    std::string cmd_mgr = "env THINKPOWER_INTERNAL=1 sudo -n " + get_manager_bin() + " " + mode_key;
+    // Call hardware manager with --internal to prevent it from issuing duplicate PPD calls and notifications
+    std::string cmd_mgr = "sudo -n " + get_manager_bin() + " " + mode_key + " --internal";
     g_spawn_command_line_async(cmd_mgr.c_str(), nullptr);
 }
 
@@ -666,7 +666,9 @@ void PowerTrayApp::open_system_monitor() {
 void PowerTrayApp::notify_user(const std::string &title, const std::string &msg, const std::string &icon) {
     char *argv[] = {
         (char*)"notify-send",
-        (char*)"-t", (char*)"4000",
+        (char*)"-a", (char*)"ThinkPower",
+        (char*)"-h", (char*)"string:x-canonical-private-synchronous:thinkpower",
+        (char*)"-t", (char*)"3000",
         (char*)"-i", (char*)icon.c_str(),
         (char*)title.c_str(),
         (char*)msg.c_str(),

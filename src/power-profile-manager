@@ -41,6 +41,14 @@ mkdir -p "$CACHE_DIR" 2>/dev/null || true
 STATE_FILE="${CACHE_DIR}/power_profile_mode"
 KBD_BACKUP="${CACHE_DIR}/prev_kbd_backlight"
 
+# --internal / --quiet 플래그 확인 (power-tray 등 내부 호출 시 중복 PPD/알림 차단)
+INTERNAL_CALL=0
+for arg in "$@"; do
+    if [ "$arg" = "--internal" ] || [ "$arg" = "-q" ] || [ "$arg" = "--quiet" ]; then
+        INTERNAL_CALL=1
+    fi
+done
+
 update_state_file() {
     local mode="$1"
     echo "$mode" > "${STATE_FILE}.tmp"
@@ -103,13 +111,13 @@ set_performance() {
     # 3. GPU & Panel
     [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 0 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
     [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo auto > /sys/class/drm/card1/device/power_dpm_force_performance_level
-    # 4. PPD (power-tray 미사용 단독 CLI 실행 시에만 동기화)
-    if [ -z "$THINKPOWER_INTERNAL" ]; then
+    # 4. PPD 및 알림 (power-tray 미사용 단독 CLI 실행 시에만 동기화 및 알림)
+    if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
         powerprofilesctl set performance >/dev/null 2>&1 || true
+        run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-performance-symbolic -t 3000 "전원 프로파일: [성능]" "CPU 부스트(4.1GHz) 활성화, 최대 성능"
     fi
 
     update_state_file "performance"
-    run_as_user notify-send -i battery-profile-performance-symbolic -t 3000 "전원 프로파일: [성능]" "CPU 부스트(4.1GHz) 활성화, 최대 성능"
 }
 
 set_balanced() {
@@ -128,13 +136,13 @@ set_balanced() {
     [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo auto > /sys/class/drm/card1/device/power_dpm_force_performance_level
     # 4. PCIe Runtime PM
     command -v powertop >/dev/null 2>&1 && powertop --auto-tune >/dev/null 2>&1 || true
-    # 5. PPD (power-tray 미사용 단독 CLI 실행 시에만 동기화)
-    if [ -z "$THINKPOWER_INTERNAL" ]; then
+    # 5. PPD 및 알림 (power-tray 미사용 단독 CLI 실행 시에만 동기화 및 알림)
+    if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
         powerprofilesctl set balanced >/dev/null 2>&1 || true
+        run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-balanced-symbolic -t 3000 "전원 프로파일: [균형]" "표준 동적 클럭 및 전력 관리"
     fi
 
     update_state_file "balanced"
-    run_as_user notify-send -i battery-profile-balanced-symbolic -t 3000 "전원 프로파일: [균형]" "표준 동적 클럭 및 전력 관리"
 }
 
 set_save() {
@@ -153,13 +161,13 @@ set_save() {
     [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo low > /sys/class/drm/card1/device/power_dpm_force_performance_level
     # 4. PCIe Runtime PM
     command -v powertop >/dev/null 2>&1 && powertop --auto-tune >/dev/null 2>&1 || true
-    # 5. PPD (power-tray 미사용 단독 CLI 실행 시에만 동기화)
-    if [ -z "$THINKPOWER_INTERNAL" ]; then
+    # 5. PPD 및 알림 (power-tray 미사용 단독 CLI 실행 시에만 동기화 및 알림)
+    if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
         powerprofilesctl set power-saver >/dev/null 2>&1 || true
+        run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-powersave-symbolic -t 3000 "전원 프로파일: [스마트 절전]" "부스트 OFF(1.7GHz 상한) 및 발열 억제\n(Wi-Fi, 블루투스, 16스레드 100% 유지)"
     fi
 
     update_state_file "save"
-    run_as_user notify-send -i battery-profile-powersave-symbolic -t 3000 "전원 프로파일: [스마트 절전]" "부스트 OFF(1.7GHz 상한) 및 발열 억제\n(Wi-Fi, 블루투스, 16스레드 100% 유지)"
 }
 
 set_ultra() {
@@ -211,15 +219,15 @@ set_ultra() {
     # - Baloo 파일 색인 중단 (CPU/SSD 불필요한 웨이크업 원천 방지)
     run_as_user balooctl6 suspend
 
-    # [5. PPD 동기화] (power-tray 미사용 단독 CLI 실행 시에만 동기화)
-    if [ -z "$THINKPOWER_INTERNAL" ]; then
+    # [5. PPD 동기화 및 알림] (power-tray 미사용 단독 CLI 실행 시에만 동기화 및 알림)
+    if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
         powerprofilesctl set power-saver >/dev/null 2>&1 || true
+        run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -u critical -i battery-low -t 5000 \
+            "전원 프로파일: [⚡ 극한 초절전 ON]" \
+            "1.4GHz 고정 | 48Hz | ASPM MAX | 8C전용 | 백라이트MAX\n(※ Wi-Fi 및 블루투스는 정상 유지됩니다)"
     fi
 
     update_state_file "ultra"
-    run_as_user notify-send -u critical -i battery-low -t 5000 \
-        "전원 프로파일: [⚡ 극한 초절전 ON]" \
-        "1.4GHz 고정 | 48Hz | ASPM MAX | 8C전용 | 백라이트MAX\n(※ Wi-Fi 및 블루투스는 정상 유지됩니다)"
 }
 
 toggle_ultra() {
