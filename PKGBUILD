@@ -29,6 +29,7 @@ package() {
     # 1. Binaries
     install -Dm755 bin/power-tray "$pkgdir/usr/bin/power-tray"
     install -Dm755 src/power-profile-manager "$pkgdir/usr/bin/power-profile-manager"
+    ln -sf power-profile-manager "$pkgdir/usr/bin/tp-ppm"
 
     # 2. Sudoers & Udev rules
     install -Dm440 src/config/99-power-profile-manager "$pkgdir/etc/sudoers.d/99-power-profile-manager"

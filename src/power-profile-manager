@@ -8,13 +8,14 @@
 # 4. ultra       : 초절전 (절전과 동일 설정, 와이파이/BT/16스레드 100% 유지, 1.7GHz 상한, 패널절전 2)
 # ==============================================================================
 
-# status 외의 명령 실행 시 루트 권한 필요
+# status 외의 명령 실행 시 루트 권한 필요 (tp-ppm 등 단축 심볼릭 링크 지원을 위해 실제 바이너리 경로 확인)
 if [ "$1" != "status" ] && [ "$EUID" -ne 0 ]; then
-    sudo -n "$0" "$@" && exit 0
+    REAL_SCRIPT="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+    sudo -n "$REAL_SCRIPT" "$@" && exit 0
     if command -v pkexec >/dev/null 2>&1; then
-        exec pkexec "$0" "$@"
+        exec pkexec "$REAL_SCRIPT" "$@"
     else
-        exec sudo "$0" "$@"
+        exec sudo "$REAL_SCRIPT" "$@"
     fi
 fi
 

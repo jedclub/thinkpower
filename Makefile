@@ -95,5 +95,6 @@ install: $(TARGET)
 	install -d $(DESTDIR)/usr/local/bin
 	install -m 755 $(TARGET) $(DESTDIR)/usr/local/bin/power-tray
 	install -m 755 src/power-profile-manager $(DESTDIR)/usr/local/bin/power-profile-manager
+	ln -sf power-profile-manager $(DESTDIR)/usr/local/bin/tp-ppm
 
 .PHONY: all clean install pgo pkg deb release

@@ -27,10 +27,13 @@ else
     make -C "$SCRIPT_DIR" -j$(nproc)
 fi
 install -m 755 "$SCRIPT_DIR/bin/power-tray" "$BIN_DIR/power-tray"
+install -m 755 "$SCRIPT_DIR/src/power-profile-manager" "$BIN_DIR/power-profile-manager"
+ln -sf power-profile-manager "$BIN_DIR/tp-ppm"
 
 echo "▶ [2/5] 루트 하드웨어 관리자 설치 중 (/usr/local/bin)..."
 sudo cp "$SCRIPT_DIR/src/power-profile-manager" "/usr/local/bin/power-profile-manager"
 sudo chmod +x "/usr/local/bin/power-profile-manager"
+sudo ln -sf power-profile-manager "/usr/local/bin/tp-ppm" 2>/dev/null || true
 
 # 3. sudoers 무암호 권한 등록
 echo "▶ [3/5] sudoers 하드웨어 제어 권한 등록 (/etc/sudoers.d)..."
