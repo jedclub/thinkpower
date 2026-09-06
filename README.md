@@ -4,34 +4,51 @@
 [![CI](https://github.com/jedclub/thinkpower/actions/workflows/ci.yml/badge.svg)](https://github.com/jedclub/thinkpower/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20(KDE%20Plasma%206%20Wayland)-orange.svg)]()
-[![Hardware](https://img.shields.io/badge/Target-ThinkPad%20%7C%20AMD%20Ryzen-red.svg)]()
+[![Target Machine](https://img.shields.io/badge/Target-ThinkPad%20L15%20Gen%201%20AMD-red.svg)]()
+[![Silicon](https://img.shields.io/badge/CPU-AMD%20Ryzen%207%20PRO%204750U-ED1C24.svg?logo=amd)]()
 [![Language](https://img.shields.io/badge/Language-C%2B%2B17%20%7C%20AVX2-00599C.svg?logo=c%2B%2B)]()
 [![Build](https://img.shields.io/badge/Optimization-PGO%20%2B%20LTO%20%2B%20x86--64--v3-brightgreen.svg)]()
 [![L10n](https://img.shields.io/badge/L10n-11%20Languages-blueviolet.svg)]()
-[![Shell](https://img.shields.io/badge/Bash-Script-green.svg)]()
 
-> **Advanced 4-Stage Hardware Power Profile & Battery Management Tray for Linux**  
-> Tailored for **ThinkPad** and **AMD Ryzen (Zen 2/3/4/5 Renoir/Cezanne/Phoenix)** laptops running **KDE Plasma 6 (Wayland)**.
+> **Advanced 4-Stage Hardware Silicon Power Management & Battery Protection Tray for Linux**  
+> Tailored and deeply tuned for **ThinkPad L15 Gen 1 (AMD Ryzen 7 PRO 4750U Renoir)** running **CachyOS / Arch Linux on KDE Plasma 6 (Wayland)**.
+
+---
+
+> [!IMPORTANT]
+> ### 💻 Machine-Specific Optimization Notice
+> **ThinkPower is personally customized, benchmarked, and hardware-tuned specifically for the author's daily-driver notebook:**
+> - **Model**: Lenovo ThinkPad L15 Gen 1 (AMD) [Type 20U7]
+> - **Processor**: AMD Ryzen 7 PRO 4750U (8 Cores / 16 Threads, Zen 2 Renoir APU, 1.4GHz base ~ 4.1GHz boost)
+> - **Graphics**: Integrated AMD Radeon Vega 7 Graphics
+> - **Storage**: Samsung SSD 980 PRO (PCIe NVMe M.2)
+> - **Memory**: DDR4-3200 SODIMM
+> - **Display**: 15.6" FHD (1920x1080 @ 60Hz IPS)
+> - **OS & Kernel**: CachyOS (Arch Linux-based, BORE/EEVDF kernel) on KDE Plasma 6 Wayland
+>
+> *Note for other devices*: While the architecture and tray applet work broadly across ThinkPads and Linux distributions, the low-level silicon tuning parameters (AMD SMU registers, 4W STAPM TDP lock, VRM 12A/16A current clamping, GPU 640MHz OverDrive, PCIe paths, and ThinkPad EC registers) are calibrated specifically for this hardware configuration.
 
 ---
 
 ## 🌟 Overview
 
-Default Linux desktop power managers only set high-level ACPI platform hints. Under the hood, modern processors still boost frequencies to 4.1GHz+ at 1.35V+ for brief background tasks, keeping fans spinning and draining batteries rapidly.
+Standard desktop power management tools (`power-profiles-daemon`, `tlp`) operate primarily through ACPI governor hints. Under the hood, modern processors still boost clocks to 4.1GHz+ at 1.35V+ for ephemeral background tasks, keeping cooling fans spinning, spiking VRM switching losses, and rapidly draining battery capacity.
 
-**ThinkPower** bridges this gap: it serves as an all-in-one replacement for the default desktop battery widget, introducing a **Dual-Layer Architecture** that synchronizes with the OS standard (`power-profiles-daemon`) while taking direct control over silicon voltage, bus sleep states, display scanout frequencies, and peripheral hardware.
+**ThinkPower** fundamentally solves this through a **Dual-Layer Architecture**:
+1. **Desktop System Tray Applet (`power-tray`)**: A native, hyper-optimized C++17 tray daemon compiled with **PGO (Profile-Guided Optimization) + AVX2 SIMD + LTO** consuming only ~8MB of RAM. It provides real-time battery inflow/outflow wattage, remaining charge time estimation to battery conservation limits (80%), Bluetooth peripheral battery levels, and seamless integration into the KDE Plasma taskbar.
+2. **Direct Hardware Silicon & Motherboard Tuner (`power-profile-manager` / `tp-ppm`)**: A privileged hardware controller that interfaces directly with the **AMD SMU (System Management Unit) co-processor**, motherboard VRM phase controllers, GPU OverDrive clocks, NVMe autonomous power states, and PCIe ASPM links.
 
 ```text
 ┌──────────────────────────────────────────────────┐
-│  🔋 배터리 76% (충전 중)                         │
+│  🔋 배터리 35% (사용 중)                         │
 │                                                  │
-│  ⚡ 충전량 : +21.5W                               │
-│  ⏳ 충전예상 : 80%까지 약 5분                     │
-│  ⚙️ 전원모드 : 🍃 스마트 절전 (1.7GHz)             │
-│  🛡️ 보호한도 : 80% (수명 보호)                   │
-│  🩺 배터리건강 : 94.2% (88회)                     │
-│  🎧 Bluetooth Earphones : 80%                    │
-│  📡 무선상태 : Wi-Fi · BT On                     │
+│  ⚡ 소비전력 : -6.52W                             │
+│  ⏳ 예상시간 : 약 5시간 40분                      │
+│  ⚙️ 전원모드 : 🛡️ 초절전 (SMU 4W · VRM 12A)       │
+│  🛡️ 보호한도 : 80% (수명 보호 활성)               │
+│  🩺 배터리건강 : 94.2%                            │
+│  📡 무선상태 : Wi-Fi On · BT Off                 │
+│  📊 SMU TDP  : 4.000W STAPM Hardware Lock        │
 └──────────────────────────────────────────────────┘
 ```
 
@@ -63,37 +80,71 @@ Default Linux desktop power managers only set high-level ACPI platform hints. Un
 
 ---
 
-## ✨ Key Features
+## ✨ Key Features in v1.1.0
 
-- 🔋 **All-In-One Battery Tray Replacement**: Displays live battery %, charging/discharging wattage (`+`/`-`), and accurate remaining time directly on your KDE taskbar panel.
-- 🏛️ **Dual-Layer State Machine**: 
-  - Standard OS sees standard `power-saver`, `balanced`, and `performance`.
-  - ThinkPower provides an extra **🛡️ Ultra Save** hardware lockdown without breaking OS specification compliance.
-- ⚡ **Real-Time Wattage Flow (+/-)**:
-  - **`+` (Inflow / Charging)**: Wattage entering the battery from the charger (e.g. `⚡ 45% (+31.2W)`).
-  - **`-` (Outflow / Discharging)**: Real-time system power consumption (e.g. ` 45% (-10.5W)`).
-- 🛡️ **ThinkPad Battery Conservation Mode**:
-  - Automatically detects hardware battery charge limits (typically 80%).
-  - Calculates remaining charging time **specifically to the protection limit**, not a fictitious 100%.
-- 🎧 **Bluetooth & Wireless Peripheral Battery Monitoring**:
-  - Auto-discovers connected Bluetooth headphones, mice, keyboards, and game controllers via UPower & BlueZ.
-- 📏 **Non-Wrapping Clean HUD Tooltip**:
-  - Typography constrained to strictly fit within the KDE StatusNotifierItem popup width without line wraps.
-- 💡 **Automatic Keyboard Backlight Memory**:
-  - Caches current keyboard light brightness before entering Ultra Save, and automatically restores it when returning to normal profiles.
-- 📶 **Zero Connectivity Loss Guarantee**:
-  - Wi-Fi, Bluetooth, input devices, and audio remain 100% active in all profiles.
+### 1. ⚡ Direct AMD SMU Hardware TDP Clamping
+- In **Ultra Save** mode, bypasses OS software governors and directly commands the **AMD SMU co-processor**:
+  - **STAPM Limit**: Clamped to **`4.000W`**
+  - **Fast PPT Limit**: Clamped to **`5.000W`**
+  - **Slow PPT Limit**: Clamped to **`4.000W`**
+  - **Thermal Limit**: Clamped to **`60°C`**
+- All 16 threads (8C / 16T) remain online and fully responsive with SMT active (no thread offlining, zero UI stuttering).
+
+### 2. 🎮 GPU 40% OverDrive Frequency Cap (640MHz)
+- Locks the Radeon Vega 7 iGPU clock to a strict **40% ceiling (640MHz)** via AMDGPU OverDrive (`pp_od_clk_voltage`).
+- Allows dynamic DPM scaling between **200MHz** (idle) and **640MHz** (load), preventing 1600MHz GPU power surges while keeping 60Hz Wayland compositing butter-smooth.
+
+### 3. 🔌 Motherboard & VRM Hardware Power Control
+- **VRM Phase Shedding (PSI0 / TDC / EDC Clamping)**:
+  - Clamps continuous thermal current (TDC) from 44A down to **`12.0A`**.
+  - Clamps peak electrical current (EDC) from 70A down to **`16.0A`**.
+  - Triggers **PSI0 (Power State Indicator)** to drop multi-phase VRM into **1-Phase low-power sleep mode**, slashing MOSFET switching and inductor ripple heat losses.
+- **PCIe & USB Bus Runtime PM**: Forces `auto` (D3hot sleep) across all PCIe bridges, endpoints, MicroSD card reader (`sdhci-pci`), Goodix fingerprint scanner, and integrated webcam.
+- **HD Audio Controller Sleep**: Puts the PCI audio bus controller into D3hot state (`power_save_controller=Y`).
+- **Interrupt & Timer Coalescing**: Disables NMI watchdog (`nmi_watchdog=0`), enables power-efficient workqueues, and consolidates timer wakeups (`timer_migration=1`).
+
+### 4. 💾 NVMe SSD & RAM Deep Sleep Tuning
+- **Kernel Laptop Mode 5**: Sets `vm.laptop_mode = 5` and extends dirty writeback intervals to 30s/60s (`dirty_expire_centisecs = 6000`).
+- Allows the **Samsung 980 PRO NVMe SSD** to stay in **PCIe ASPM L1.2 sub-5mW ultra-deep sleep** for prolonged periods without waking the NAND flash.
+- **RAM THP Optimization**: Disables Transparent Hugepage defragmentation (`defrag = never`, `khugepaged/defrag = 0`) to eliminate high-frequency memory compaction interrupts.
+
+### 5. 📻 Bluetooth Radio Hardware Cut & Safe Recovery
+- In Ultra Save mode, completely blocks Bluetooth radio emissions (`rfkill block bluetooth`), eliminating ~0.2W~0.3W of idle transceiver power.
+- Automatically saves prior Bluetooth state and restores radio power on profile exit.
+
+### 6. 🛡️ Multi-Layered Failsafe Recovery Architecture
+- **Automatic AC Charger Recovery**: Immediate failsafe restore to `balanced` mode upon AC power plug-in via udev rules (`98-thinkpower-ac.rules`) and tray D-Bus listeners.
+- **Clean Boot ID Tracking**: Detects fresh reboots via `/proc/sys/kernel/random/boot_id`, purging stale cache files and ensuring the system always boots cleanly into safe defaults.
+- **Synchronous Tray Teardown**: Ensures hardware limits (25W TDP, 44A/70A VRM, 1600MHz GPU) are completely restored before the tray daemon process exits.
+- **1-Click Failsafe Launcher**: Includes a dedicated KDE Application Launcher shortcut (`power-restore.desktop`) for emergency hardware reset.
+
+### 7. 📊 Live Component-Level Power Analyzer (`tp-ppm analyze`)
+- Run `tp-ppm analyze` at any time to inspect live, real-time power consumption broken down by silicon component:
+  - Battery discharge power (`BAT0`)
+  - AMD APU SoC Package & Core compute power (RAPL)
+  - SMU co-processor telemetry (STAPM, Fast/Slow PPT, TDC/EDC currents, temperature)
+  - Display panel logic + LED backlight power
+  - Cooling fan wattage based on live RPM
+  - DDR4 RAM, Wi-Fi 6, NVMe SSD, and motherboard VRM conversion losses
 
 ---
 
 ## 📊 Profile Comparison
 
-| Profile | CPU Clock Floor/Cap | Threads | Screen Mode | AMD ABM | Fan Target | Typical Power |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **⚡ Performance** | Up to 4.1GHz Boost | 16T | 60Hz | Level 0 | Max Airflow | 25W ~ 40W |
-| **⚖️ Balanced** | Dynamic 1.4 ~ 4.1GHz | 16T | 60Hz | Level 1 | Balanced | 12W ~ 22W |
-| **🍃 Smart Save** | **1.7GHz Max (No Boost)** | **16T** | **60Hz** | **Level 2** | **Silent / Low** | **8W ~ 10W** |
-| **🛡️ Ultra Save** | **1.4GHz Locked (Max Cap)** | **4T (4C Parking)** | **48Hz / 24FPS & 20% Bright** | **Level 4 + GPU Low + No Blur/Anim** | **0 RPM (Off)** | **~3W Target** |
+| Setting / Component | ⚡ Performance | ⚖️ Balanced (Default) | 🍃 Smart Save | 🛡️ Ultra Save (Extreme) |
+| :--- | :--- | :--- | :--- | :--- |
+| **CPU Clock & Boost** | Dynamic (Up to 4.1GHz) | Dynamic (1.4 ~ 4.1GHz) | Max 1.7GHz (Boost OFF) | **Max 1.4GHz (Boost OFF)** |
+| **Threads & SMT** | 16 Threads (SMT ON) | 16 Threads (SMT ON) | 16 Threads (SMT ON) | **16 Threads (SMT ON)** |
+| **AMD SMU STAPM Limit**| 25.0W (OEM Unlocked) | 18.0W | 10.0W | **4.000W Hardware Lock** |
+| **Fast / Slow PPT** | 30W / 25W | 22W / 18W | 12W / 10W | **5.0W / 4.0W** |
+| **VRM Current (TDC/EDC)**| 44A / 70A (Full) | 35A / 55A | 25A / 35A | **12.0A / 16.0A (1-Phase)** |
+| **iGPU Max Clock** | 1600MHz | 1600MHz | 1600MHz | **640MHz Cap (40% Lock)** |
+| **Display Brightness** | User set | User set | User set | **20% Cap (Auto Memory)** |
+| **KWin / Wayland FPS** | 60Hz Smooth | 60Hz Smooth | 60Hz Smooth | **60Hz Smooth (No Stutter)** |
+| **ThinkPad EC Profile**| `performance` | `balanced` | `low-power` | **`low-power` (Silent Fan)** |
+| **Bluetooth Radio** | ON | ON | ON | **OFF (Hardware Block)** |
+| **Kernel Laptop Mode** | 0 (Normal) | 0 (Normal) | 0 (Normal) | **5 (NVMe ASPM L1.2 5mW)** |
+| **Typical Power Draw** | 18W ~ 35W | 10W ~ 16W | 8W ~ 11W | **6.5W ~ 8.5W** |
 
 ---
 
@@ -101,26 +152,28 @@ Default Linux desktop power managers only set high-level ACPI platform hints. Un
 
 ```mermaid
 graph TD
-    UI["KDE Taskbar System Tray (power-tray Native C++)"]
+    Tray["KDE Taskbar Applet (power-tray C++17 PGO+AVX2)"]
     
-    subgraph "1. Information & Peripheral Monitoring"
-        UI -->|Sysfs Direct Read| K1["/sys/class/power_supply/BAT0/ (Capacity, Wattage, Threshold)"]
-        UI -->|GDBus Query| K2["UPower / BlueZ (Headphones, Mice, Keyboards)"]
+    subgraph "1. Real-Time Telemetry & Desktop Sync"
+        Tray -->|Direct Sysfs| M1["/sys/class/power_supply/BAT0/ (Wattage, Health, Threshold)"]
+        Tray -->|GDBus Query| M2["UPower & BlueZ (Peripheral Battery Levels)"]
+        Tray -->|D-Bus Listen| M3["power-profiles-daemon (Standard OS Sync)"]
     end
 
-    subgraph "2. System Standards Sync"
-        UI -->|GDBus Signal Listen| K3["power-profiles-daemon (Standard OS Profile)"]
-        UI -->|KWin Wayland IPC| K4["kscreen-doctor (48Hz / 60Hz Refresh Rate)"]
+    subgraph "2. Privileged Silicon & Hardware Tuning"
+        Tray -->|Passwordless sudo| PPM["power-profile-manager (tp-ppm)"]
+        PPM --> H1["AMD SMU: STAPM 4W / Fast 5W / Slow 4W Lock"]
+        PPM --> H2["Motherboard VRM: TDC 12A / EDC 16A Phase Shedding"]
+        PPM --> H3["AMDGPU: 640MHz OverDrive Cap (40% Limit)"]
+        PPM --> H4["NVMe: Laptop Mode 5 (PCIe ASPM L1.2 5mW Sleep)"]
+        PPM --> H5["RAM: THP Defrag Disabled & Memory Compaction"]
+        PPM --> H6["Peripherals: Bluetooth Radio Cut & Auto Backlight Memory"]
     end
 
-    subgraph "3. Root Hardware Silicon Tuning"
-        UI -->|Passwordless sudo| H["power-profile-manager"]
-        H --> H1["CPU: Boost Disable & 1.4GHz Governor Lock"]
-        H --> H2["CPU: SMT 8 Physical Cores (Logical Thread Offlining)"]
-        H --> H3["GPU: AMD ABM Panel Power Savings (Level 4)"]
-        H --> H4["SSD: Linux Kernel Laptop Mode 5 (APST Deep Sleep)"]
-        H --> H5["PCIe: ASPM powersupersave (L1.2 Link Sleep)"]
-        H --> H6["ThinkPad EC: Fan Stop (0 RPM) & Keyboard LED Memory"]
+    subgraph "3. Failsafe Safety Net"
+        Udev["AC Plug Event (98-thinkpower-ac.rules)"] -->|Instant Restore| PPM
+        TrayExit["Tray Teardown / SIGTERM"] -->|Synchronous Reset| PPM
+        DesktopReset["KDE 1-Click Restore Shortcut"] -->|Emergency Reset| PPM
     end
 ```
 
@@ -139,15 +192,18 @@ thinkpower/
 ├── PKGBUILD                         # Arch Linux & CachyOS native package recipe
 ├── install.sh                       # One-Click Builder & Installer
 ├── uninstall.sh                     # Clean Uninstaller
-├── packaging/                       # Distribution packaging tools (.deb, .pkg.tar.zst)
-│   └── build-deb.sh                 # High-performance .deb builder
+├── packaging/                       # Packaging tools and desktop integrations
+│   ├── build-deb.sh                 # Debian package (.deb) builder
+│   ├── power-tray.service           # systemd user service unit
+│   ├── power-tray.desktop           # XDG Autostart entry
+│   ├── power-ultra.desktop          # KDE Application Launcher shortcut (Ultra Save)
+│   ├── power-restore.desktop        # KDE 1-Click Emergency Failsafe Restore shortcut
+│   └── thinkpower.install           # Arch package post-install script
 ├── src/
 │   ├── power-tray.cpp               # Native C++17 AyatanaAppIndicator Tray Applet
-│   ├── power-profile-manager        # Privileged Hardware Silicon Tuner
+│   ├── power-profile-manager        # Privileged Hardware Silicon & Motherboard Tuner (tp-ppm)
 │   └── config/
-│       ├── power-tray.service       # systemd user service unit
-│       ├── power-tray.desktop       # XDG Autostart entry
-│       ├── power-ultra.desktop      # KDE Application Launcher shortcut
+│       ├── 98-thinkpower-ac.rules   # Udev rule for automatic charger restore
 │       └── 99-power-profile-manager # Sudoers passwordless rule
 └── docs/
     ├── images/                      # High-DPI screenshots & UI previews
@@ -161,16 +217,16 @@ thinkpower/
 
 ## 🚀 Installation
 
-### 📦 Pre-built Packages (Quick Install)
+### 📦 Pre-built Packages (Recommended)
 
-Pre-compiled and optimized packages are automatically built and published with every release:
+Pre-compiled and optimized packages are automatically built with PGO and published with every release:
 
-👉 **[Download Latest Release (v1.0.0)](https://github.com/jedclub/thinkpower/releases/latest)**
+👉 **[Download Latest Release (v1.1.0)](https://github.com/jedclub/thinkpower/releases/latest)**
 
 | Target Distribution | Package Format | Direct One-Line Installation |
 | :--- | :---: | :--- |
-| **🚀 CachyOS / Arch Linux** (Primary) | **`.pkg.tar.zst`** | `sudo pacman -U thinkpower-1.0.0-1-x86_64.pkg.tar.zst` |
-| **Debian / Ubuntu / Mint** | **`.deb`** | `sudo apt install ./thinkpower_1.0.0_amd64.deb` |
+| **🚀 CachyOS / Arch Linux** (Primary) | **`.pkg.tar.zst`** | `sudo pacman -U thinkpower-1.1.0-1-x86_64.pkg.tar.zst` |
+| **Debian / Ubuntu / Mint** | **`.deb`** | `sudo apt install ./thinkpower_1.1.0_amd64.deb` |
 | **Generic Linux (Any Distro)** | **`.tar.gz`** | Extract & run `./install.sh` |
 
 ---
@@ -179,16 +235,11 @@ Pre-compiled and optimized packages are automatically built and published with e
 
 #### 1. Prerequisites
 
-Make sure the following build and runtime packages are installed on your distribution:
+Make sure the following build and runtime packages are installed:
 
 **Arch Linux / CachyOS / Manjaro**:
 ```bash
 sudo pacman -S base-devel cmake gcc pkgconf libayatana-appindicator gtk3 glib2 power-profiles-daemon upower libnotify
-```
-
-**Fedora**:
-```bash
-sudo dnf install gcc-c++ make cmake pkgconfig libayatana-appindicator-devel gtk3-devel glib2-devel power-profiles-daemon upower libnotify
 ```
 
 **Debian / Ubuntu**:
@@ -196,54 +247,58 @@ sudo dnf install gcc-c++ make cmake pkgconfig libayatana-appindicator-devel gtk3
 sudo apt install build-essential cmake pkg-config libayatana-appindicator3-dev libgtk-3-dev libglib2.0-dev power-profiles-daemon upower libnotify-bin
 ```
 
-### 2. Native Package Installation (Arch Linux / CachyOS / Manjaro)
+#### 2. Native Package Build & Install (Arch Linux / CachyOS)
 
-The recommended installation method on Arch-based distributions is using the native pacman package with **PGO (Profile-Guided Optimization) + AVX2 + LTO**:
+Build the native package with **Extreme PGO (500,000 iterations) + AVX2 + LTO**:
 
 ```bash
-# 1. Build the native package (runs 500,000 profiling iterations & builds .pkg.tar.zst)
+# 1. Build native package
 make pkg
 
 # 2. Install using pacman
-sudo pacman -U thinkpower-1.0.0-1-x86_64.pkg.tar.zst
+sudo pacman -U thinkpower-1.1.0-1-x86_64.pkg.tar.zst
 
-# 3. Enable and start the user tray daemon
+# 3. Enable and start the tray service
 systemctl --user enable --now power-tray.service
 ```
 
-### 3. Debian / Ubuntu / Linux Mint / Pop!_OS (.deb)
+#### 3. Debian / Ubuntu Package Build (.deb)
 
 ```bash
-# 1. Build .deb package (with PGO + AVX2 + LTO)
 make deb
-
-# 2. Install using apt
-sudo apt install ./release/thinkpower_1.0.0_amd64.deb
-
-# 3. Enable and start user daemon
+sudo apt install ./release/thinkpower_1.1.0_amd64.deb
 systemctl --user enable --now power-tray.service
 ```
 
-### 4. Universal Release Packages & All-In-One Build
+#### 4. Local Quick Script Install
 
-To generate all distribution packages with extreme optimization in one command:
-
-```bash
-make release
-```
-
-This automatically generates all release artifacts in `release/`:
-- **`thinkpower-1.0.0-1-x86_64.pkg.tar.zst`**: Native Arch Linux & CachyOS package.
-- **`thinkpower_1.0.0_amd64.deb`**: Debian & Ubuntu package.
-- **`thinkpower-1.0.0-linux-x86_64.tar.gz`**: Universal portable distribution archive with standalone installer.
-- **`SHA256SUMS.txt`**: Cryptographic integrity checksums.
-
-### 5. Local Quick Script Install
-
-Alternatively, build and install directly to `~/.local/bin/` without packaging:
+Alternatively, compile and install directly to `~/.local/bin/` without packaging:
 
 ```bash
 ./install.sh
+```
+
+---
+
+## 💻 Command-Line Interface (`tp-ppm`)
+
+ThinkPower provides the `tp-ppm` (alias for `power-profile-manager`) CLI for direct terminal inspection and scripting:
+
+```bash
+# Check current power profile and hardware locks
+tp-ppm status
+
+# Run live component-level wattage breakdown (RAPL, SMU, Panel, Fan, VRM)
+tp-ppm analyze
+
+# Switch power modes manually
+tp-ppm ultra        # Enter 4W SMU, 640MHz GPU, 12A VRM ultra save
+tp-ppm save         # Enter 10W SMU smart save
+tp-ppm balanced     # Enter 18W balanced mode
+tp-ppm performance  # Enter 25W full power mode
+
+# Emergency failsafe restore (unlock all hardware to factory OEM defaults)
+tp-ppm restore
 ```
 
 ---
@@ -260,16 +315,6 @@ sudo pacman -R thinkpower
 ```bash
 ./uninstall.sh
 ```
-
----
-
-## 📚 Technical Documentation
-
-For detailed technical specifications, explore the `docs/` directory:
-- [01-ARCHITECTURE.md](docs/01-ARCHITECTURE.md) — Dual-layer state machine and D-Bus synchronization.
-- [02-HARDWARE-TUNING.md](docs/02-HARDWARE-TUNING.md) — Complete sysfs register and kernel parameter reference.
-- [03-FEATURES-GUIDE.md](docs/03-FEATURES-GUIDE.md) — Detailed feature breakdown and usage guide.
-- [04-TROUBLESHOOTING.md](docs/04-TROUBLESHOOTING.md) — Troubleshooting, permissions, and debugging tips.
 
 ---
 
