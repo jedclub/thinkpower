@@ -115,7 +115,7 @@ public:
     void update_state_ui();
     void switch_mode(const std::string &mode_key, const std::string &trigger_source = "user");
     void on_radio_toggled(GtkCheckMenuItem *item, const std::string &mode_key);
-    void show_detailed_status();
+    void open_system_monitor();
 
     // D-Bus Signal Callback
     void on_dbus_signal(const std::string &new_os_profile);
@@ -136,7 +136,7 @@ private:
 
     static gboolean timer_callback(gpointer user_data);
     static void radio_callback(GtkCheckMenuItem *item, gpointer user_data);
-    static void detail_callback(GtkMenuItem *item, gpointer user_data);
+    static void monitor_callback(GtkMenuItem *item, gpointer user_data);
 
     AppIndicator *indicator = nullptr;
     GtkWidget *menu = nullptr;
@@ -653,22 +653,13 @@ void PowerTrayApp::on_radio_toggled(GtkCheckMenuItem *item, const std::string &m
     }
 }
 
-void PowerTrayApp::show_detailed_status() {
-    std::string mgr = get_manager_bin();
-    std::string cmd = "sudo -n " + mgr + " status";
-    gchar *stdout_str = nullptr;
-    gchar *stderr_str = nullptr;
-    GError *error = nullptr;
-
-    if (g_spawn_command_line_sync(cmd.c_str(), &stdout_str, &stderr_str, nullptr, &error)) {
-        std::string res = stdout_str ? stdout_str : "";
-        notify_user("전원 관리 상세 정보", res, "dialog-information");
-        g_free(stdout_str);
-        g_free(stderr_str);
+void PowerTrayApp::open_system_monitor() {
+    if (g_find_program_in_path("plasma-systemmonitor")) {
+        g_spawn_command_line_async("plasma-systemmonitor", nullptr);
+    } else if (g_find_program_in_path("ksysguard")) {
+        g_spawn_command_line_async("ksysguard", nullptr);
     } else {
-        std::string err_msg = error ? error->message : "실행 실패";
-        notify_user("오류", err_msg, "dialog-error");
-        if (error) g_error_free(error);
+        g_spawn_command_line_async("kde-open5 /usr/share/applications/org.kde.plasma-systemmonitor.desktop", nullptr);
     }
 }
 
@@ -827,10 +818,10 @@ void PowerTrayApp::build_menu() {
     gtk_widget_show(sep2);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), sep2);
 
-    GtkWidget *detail_item = gtk_menu_item_new_with_label("📊 하드웨어 상세 정보 보기 (알림창)");
-    g_signal_connect(detail_item, "activate", G_CALLBACK(detail_callback), this);
-    gtk_widget_show(detail_item);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), detail_item);
+    GtkWidget *monitor_item = gtk_menu_item_new_with_label("📈 시스템 모니터 열기 (KDE 성능)");
+    g_signal_connect(monitor_item, "activate", G_CALLBACK(monitor_callback), this);
+    gtk_widget_show(monitor_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), monitor_item);
 }
 
 gboolean PowerTrayApp::timer_callback(gpointer user_data) {
@@ -848,11 +839,11 @@ void PowerTrayApp::radio_callback(GtkCheckMenuItem *item, gpointer user_data) {
     }
 }
 
-void PowerTrayApp::detail_callback(GtkMenuItem *item, gpointer user_data) {
+void PowerTrayApp::monitor_callback(GtkMenuItem *item, gpointer user_data) {
     (void)item;
     PowerTrayApp *app = static_cast<PowerTrayApp*>(user_data);
     if (app) {
-        app->show_detailed_status();
+        app->open_system_monitor();
     }
 }
 
