@@ -35,9 +35,14 @@ jobs:
           file bin/power-tray
           ./bin/power-tray --train
 
+      - name: Run Regression Prevention Test Suite
+        run: |
+          sudo apt-get install -y desktop-file-utils
+          make test
+
       - name: Build Debian Package (.deb)
         run: |
-          ./packaging/build-deb.sh 1.0.0 amd64
+          ./packaging/build-deb.sh 1.1.0 amd64
           ls -lh release/*.deb
 
   build-arch-package:

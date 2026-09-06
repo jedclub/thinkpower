@@ -98,4 +98,8 @@ install: $(TARGET)
 	install -m 755 src/power-profile-manager $(DESTDIR)/usr/local/bin/power-profile-manager
 	ln -sf power-profile-manager $(DESTDIR)/usr/local/bin/tp-ppm
 
-.PHONY: all clean install pgo pkg deb release
+test:
+	@echo "==> Running Automated Regression Test Suite..."
+	@./tests/run_tests.sh
+
+.PHONY: all clean install pgo pkg deb release test

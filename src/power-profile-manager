@@ -15,13 +15,26 @@ if [ "$EUID" -ne 0 ]; then
     if sudo -n "$REAL_SCRIPT" "$@" 2>/dev/null; then
         exit 0
     fi
-    if [ "$1" != "status" ]; then
-        if command -v pkexec >/dev/null 2>&1; then
-            exec pkexec "$REAL_SCRIPT" "$@"
-        else
-            exec sudo "$REAL_SCRIPT" "$@"
-        fi
-    fi
+    case "$1" in
+        status|analyze|breakdown)
+            # 단순 조회 명령은 무암호 sudo 실패 시에도 일반 사용자 권한으로 가능한 범위까지 출력
+            ;;
+        help|--help|-h|"")
+            echo "사용법: $(basename "$0") {performance|balanced|save|ultra|toggle|restore|ac-event|status|analyze}"
+            exit 0
+            ;;
+        performance|perf|balanced|bal|save|powersave|ultra|toggle|toggle-ultra|restore|reset|failsafe|ac-event|ac-plug|on-ac)
+            if command -v pkexec >/dev/null 2>&1; then
+                exec pkexec "$REAL_SCRIPT" "$@"
+            else
+                exec sudo "$REAL_SCRIPT" "$@"
+            fi
+            ;;
+        *)
+            echo "사용법: $(basename "$0") {performance|balanced|save|ultra|toggle|restore|ac-event|status|analyze}" >&2
+            exit 1
+            ;;
+    esac
 fi
 
 # 일반 사용자 환경 변수 (kscreen-doctor, notify-send 등 데스크톱 연동용)
@@ -42,16 +55,20 @@ run_as_user() {
         "$@" 2>/dev/null || true
 }
 
-# 중복 실행 방지 락 (status 조회 제외, 동시 모드 변경 시 순차 실행 보장)
-if [ "$1" != "status" ]; then
-    LOCK_FILE="/run/lock/thinkpower-manager.lock"
-    [ ! -d "/run/lock" ] && LOCK_FILE="/tmp/thinkpower-manager.lock"
-    exec 200>"$LOCK_FILE"
-    if ! flock -w 5 200; then
-        echo "경고: 다른 전원 모드 변경 작업이 진행 중입니다. (중복 실행 방지)" >&2
-        exit 1
-    fi
-fi
+# 중복 실행 방지 락 (status, analyze 등 단순 조회 제외, 동시 모드 변경 시 순차 실행 보장)
+case "$1" in
+    status|analyze|breakdown|help|--help|-h|"")
+        ;;
+    *)
+        LOCK_FILE="/tmp/thinkpower-manager.lock"
+        [ -w "/run/lock" ] && LOCK_FILE="/run/lock/thinkpower-manager.lock"
+        exec 200>"$LOCK_FILE"
+        if ! flock -w 5 200; then
+            echo "경고: 다른 전원 모드 변경 작업이 진행 중입니다. (중복 실행 방지)" >&2
+            exit 1
+        fi
+        ;;
+esac
 
 CACHE_DIR="${USER_HOME}/.cache"
 mkdir -p "$CACHE_DIR" 2>/dev/null || true
@@ -828,6 +845,10 @@ case "$1" in
         ;;
     analyze|breakdown)
         analyze_power
+        ;;
+    help|--help|-h|"")
+        echo "사용법: $(basename "$0") {performance|balanced|save|ultra|toggle|restore|ac-event|status|analyze}"
+        exit 0
         ;;
     *)
         echo "사용법: $(basename "$0") {performance|balanced|save|ultra|toggle|restore|ac-event|status|analyze}"
