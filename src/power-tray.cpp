@@ -17,6 +17,7 @@
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include "l10n.hpp"
 
 #if defined(__AVX2__)
 #include <immintrin.h>
@@ -104,7 +105,7 @@ struct BatteryInfo {
     std::string time_str;
     int cycle_count = 0;
     double health_pct = 100.0;
-    std::string protect_str = "100% (일반)";
+    std::string protect_str;
     std::vector<PeripheralInfo> peripherals;
 };
 
@@ -280,15 +281,17 @@ static std::string format_duration(double hours) {
         h += 1;
         m = 0;
     }
+    char buf[64];
     if (h > 0 && m > 0) {
-        return std::to_string(h) + "시간 " + std::to_string(m) + "분";
+        snprintf(buf, sizeof(buf), L10n::tr(L10n::StrId::TIME_HOURS_MINS_FMT), h, m);
     } else if (h > 0) {
-        return std::to_string(h) + "시간";
+        snprintf(buf, sizeof(buf), L10n::tr(L10n::StrId::TIME_HOURS_FMT), h);
     } else if (m > 0) {
-        return std::to_string(m) + "분";
+        snprintf(buf, sizeof(buf), L10n::tr(L10n::StrId::TIME_MINS_FMT), m);
     } else {
-        return "1분 미만";
+        return L10n::tr(L10n::StrId::TIME_LESS_THAN_MIN);
     }
+    return std::string(buf);
 }
 
 BatteryInfo PowerTrayApp::get_battery_info() {
@@ -352,7 +355,7 @@ BatteryInfo PowerTrayApp::get_battery_info() {
 
             if (info.status == "Discharging" && energy_now > 0) {
                 double hours = static_cast<double>(energy_now) / calc_power;
-                info.time_str = "약 " + format_duration(hours);
+                info.time_str = format_duration(hours);
             } else if (info.status == "Charging") {
                 double target_energy = energy_full * (info.charge_limit / 100.0);
                 double diff = std::max(0.0, target_energy - energy_now);
@@ -360,12 +363,16 @@ BatteryInfo PowerTrayApp::get_battery_info() {
                     double hours = diff / calc_power;
                     std::string dur = format_duration(hours);
                     if (info.charge_limit < 100) {
-                        info.time_str = std::to_string(info.charge_limit) + "%까지 약 " + dur;
+                        char tbuf[128];
+                        snprintf(tbuf, sizeof(tbuf), L10n::tr(L10n::StrId::TIME_TO_LIMIT_FMT), info.charge_limit);
+                        info.time_str = std::string(tbuf) + dur;
                     } else {
-                        info.time_str = "완충까지 약 " + dur;
+                        info.time_str = std::string(L10n::tr(L10n::StrId::TIME_TO_FULL_PREFIX)) + dur;
                     }
                 } else {
-                    info.time_str = std::to_string(info.charge_limit) + "% 도달 직전";
+                    char tbuf[128];
+                    snprintf(tbuf, sizeof(tbuf), L10n::tr(L10n::StrId::TIME_REACHING_SOON_FMT), info.charge_limit);
+                    info.time_str = tbuf;
                 }
             }
         }
@@ -384,9 +391,11 @@ BatteryInfo PowerTrayApp::get_battery_info() {
     }
 
     if (info.charge_limit < 100) {
-        info.protect_str = std::to_string(info.charge_limit) + "% (수명 보호)";
+        char pbuf[64];
+        snprintf(pbuf, sizeof(pbuf), L10n::tr(L10n::StrId::PROTECT_LIMIT_FMT), info.charge_limit);
+        info.protect_str = pbuf;
     } else {
-        info.protect_str = "100% (일반)";
+        info.protect_str = L10n::tr(L10n::StrId::PROTECT_NORMAL);
     }
 
     info.peripherals = get_peripheral_batteries();
@@ -470,7 +479,9 @@ std::vector<PeripheralInfo> PowerTrayApp::get_peripheral_batteries() {
                 else if (dev_type == 3) icon = "⌨️";
 
                 if (model.empty()) {
-                    model = (dev_type == 2 ? "무선 마우스" : (dev_type == 3 ? "무선 키보드" : "블루투스 음향기기"));
+                    model = (dev_type == 2 ? L10n::tr(L10n::StrId::DEV_MOUSE) :
+                            (dev_type == 3 ? L10n::tr(L10n::StrId::DEV_KEYBOARD) :
+                                             L10n::tr(L10n::StrId::DEV_AUDIO)));
                 }
                 peripherals.push_back({model, icon, static_cast<int>(std::round(pct))});
             }
@@ -489,20 +500,20 @@ void PowerTrayApp::update_icon_label_and_tooltip(const std::string &mode, const 
     int charge_limit = bat.charge_limit;
     bool is_ac = bat.ac_online;
 
-    // 1. 작업표시줄 라벨 (충전 +, 대기 🔌, 방전 -)
+    // 1. Taskbar label (Charging +, Standby 🔌, Discharging -)
     std::ostringstream oss_lbl;
     if (status == "Charging") {
         oss_lbl << std::fixed << std::setprecision(1) << " ⚡ " << cap << "% (+" << power_w << "W)";
     } else if (status == "Full" || (status == "Not charging" && cap >= charge_limit)) {
-        oss_lbl << " 🔌 " << cap << "% (완료)";
+        oss_lbl << " 🔌 " << cap << "% (" << L10n::tr(L10n::StrId::STATUS_COMPLETE_TAG) << ")";
     } else if (is_ac || status == "Not charging") {
-        oss_lbl << " 🔌 " << cap << "% (대기)";
+        oss_lbl << " 🔌 " << cap << "% (" << L10n::tr(L10n::StrId::STATUS_STANDBY) << ")";
     } else {
         oss_lbl << std::fixed << std::setprecision(1) << " " << cap << "% (-" << power_w << "W)";
     }
     app_indicator_set_label(indicator, oss_lbl.str().c_str(), " ⚡ 100% (+00.0W)");
 
-    // 2. 아이콘 설정
+    // 2. Icon setup
     int pct_10 = std::min(100, std::max(0, static_cast<int>(std::round(cap / 10.0) * 10)));
     std::string p_name = "balanced";
     if (mode == "performance") p_name = "performance";
@@ -516,76 +527,81 @@ void PowerTrayApp::update_icon_label_and_tooltip(const std::string &mode, const 
     }
     app_indicator_set_icon_full(indicator, icon_buf, (std::to_string(cap) + "% - " + mode).c_str());
 
-    // 3. 툴팁 설정 (상태 한글화 및 정확한 대기/완료 구분)
-    std::string status_ko;
+    // 3. Tooltip setup (localized and distinct standby/full status)
+    std::string status_txt;
     if (status == "Charging") {
-        status_ko = "충전 중";
+        status_txt = L10n::tr(L10n::StrId::STATUS_CHARGING);
     } else if (status == "Full") {
-        status_ko = "완충 (100%)";
+        status_txt = L10n::tr(L10n::StrId::STATUS_FULL);
     } else if (status == "Not charging") {
         if (cap >= charge_limit) {
-            status_ko = "충전 완료 (" + std::to_string(charge_limit) + "% 보호 한도)";
+            char buf[128];
+            snprintf(buf, sizeof(buf), L10n::tr(L10n::StrId::STATUS_CHARGE_LIMIT_FMT), charge_limit);
+            status_txt = buf;
         } else if (bat.charge_start > 0 && cap >= bat.charge_start) {
-            status_ko = "충전 대기 (" + std::to_string(bat.charge_start) + "% 이하 재개)";
+            char buf[128];
+            snprintf(buf, sizeof(buf), L10n::tr(L10n::StrId::STATUS_PENDING_RESUME_FMT), bat.charge_start);
+            status_txt = buf;
         } else {
-            status_ko = "충전 대기 (전원 연결됨)";
+            status_txt = L10n::tr(L10n::StrId::STATUS_PENDING_AC);
         }
     } else if (status == "Discharging") {
-        status_ko = "배터리 사용";
+        status_txt = L10n::tr(L10n::StrId::STATUS_DISCHARGING);
     } else {
-        status_ko = is_ac ? "충전 대기 (전원 연결됨)" : "배터리 사용";
+        status_txt = is_ac ? L10n::tr(L10n::StrId::STATUS_PENDING_AC) : L10n::tr(L10n::StrId::STATUS_DISCHARGING);
     }
-    std::string tooltip_title = "배터리 " + std::to_string(cap) + "% (" + status_ko + ")";
+    std::string tooltip_title = std::string(L10n::tr(L10n::StrId::MENU_BATTERY_PREFIX)) + std::to_string(cap) + "% (" + status_txt + ")";
 
     std::map<std::string, std::string> mode_titles = {
-        {"performance", "⚡ 성능 (4.1GHz)"},
-        {"balanced",    "⚖️ 균형 (동적클럭)"},
-        {"save",        "🍃 스마트 절전 (1.7GHz)"},
-        {"ultra",       "🛡️ 극한 초절전 (1.4GHz, 48Hz)"}
+        {"performance", L10n::tr(L10n::StrId::MODE_TITLE_PERF)},
+        {"balanced",    L10n::tr(L10n::StrId::MODE_TITLE_BALANCED)},
+        {"save",        L10n::tr(L10n::StrId::MODE_TITLE_SAVE)},
+        {"ultra",       L10n::tr(L10n::StrId::MODE_TITLE_ULTRA)}
     };
     std::string mode_title = mode_titles.count(mode) ? mode_titles[mode] : mode;
 
     std::string power_line;
     std::string time_line;
 
+    char pwr_buf[128];
     if (status == "Charging") {
-        std::ostringstream ss;
-        ss << std::fixed << std::setprecision(1) << "⚡ 충전량 : +" << power_w << "W";
-        power_line = ss.str();
+        snprintf(pwr_buf, sizeof(pwr_buf), L10n::tr(L10n::StrId::POWER_CHARGE_RATE_FMT), power_w);
+        power_line = pwr_buf;
         if (!bat.time_str.empty()) {
-            time_line = "⏳ 충전예상 : " + bat.time_str;
+            time_line = "⏳ " + bat.time_str;
         }
     } else if (status == "Full" || (status == "Not charging" && cap >= charge_limit)) {
-        power_line = "🔌 전원 : 어댑터 직결 (" + std::to_string(charge_limit) + "% 보호 한도 유지)";
+        snprintf(pwr_buf, sizeof(pwr_buf), L10n::tr(L10n::StrId::POWER_AC_DIRECT_FMT), charge_limit);
+        power_line = pwr_buf;
     } else if (is_ac || status == "Not charging") {
-        power_line = "🔌 전원 : 어댑터 연결됨 (충전 대기 중)";
+        power_line = L10n::tr(L10n::StrId::POWER_AC_WAITING);
     } else {
-        std::ostringstream ss;
-        ss << std::fixed << std::setprecision(1) << "⚡ 사용량 : -" << power_w << "W";
-        power_line = ss.str();
+        snprintf(pwr_buf, sizeof(pwr_buf), L10n::tr(L10n::StrId::POWER_DISCHARGE_RATE_FMT), power_w);
+        power_line = pwr_buf;
         if (!bat.time_str.empty()) {
-            time_line = "⏳ 남은시간 : " + bat.time_str;
+            time_line = std::string(L10n::tr(L10n::StrId::TIME_REMAINING_PREFIX)) + bat.time_str;
         }
     }
 
-    std::string protect_line = "🛡️ 보호한도 : " + bat.protect_str;
-    std::ostringstream ss_hlth;
-    ss_hlth << std::fixed << std::setprecision(1) << "🩺 배터리건강 : " << bat.health_pct << "% (" << bat.cycle_count << "회)";
-    std::string health_line = ss_hlth.str();
+    std::string protect_line = std::string(L10n::tr(L10n::StrId::PROTECT_TITLE)) + bat.protect_str;
+
+    char health_buf[128];
+    snprintf(health_buf, sizeof(health_buf), L10n::tr(L10n::StrId::HEALTH_LINE_FMT), bat.health_pct, bat.cycle_count);
+    std::string health_line = health_buf;
 
     std::vector<std::string> body_elements;
     body_elements.push_back(power_line);
     if (!time_line.empty()) {
         body_elements.push_back(time_line);
     }
-    body_elements.push_back("⚙️ 전원모드 : " + mode_title);
+    body_elements.push_back("⚙️ " + mode_title);
     body_elements.push_back(protect_line);
     body_elements.push_back(health_line);
 
     for (const auto &p : bat.peripherals) {
         body_elements.push_back(p.icon + " " + p.name + " : " + std::to_string(p.pct) + "%");
     }
-    body_elements.push_back("📡 무선상태 : Wi-Fi · BT On");
+    body_elements.push_back(L10n::tr(L10n::StrId::WIRELESS_STATUS));
 
     std::string tooltip_body;
     for (size_t i = 0; i < body_elements.size(); ++i) {
@@ -616,43 +632,46 @@ void PowerTrayApp::update_state_ui() {
 
     update_icon_label_and_tooltip(mode, bat);
 
-    std::string status_ko;
+    std::string status_txt;
     if (bat.status == "Charging") {
-        status_ko = "충전 중";
+        status_txt = L10n::tr(L10n::StrId::STATUS_CHARGING);
     } else if (bat.status == "Full") {
-        status_ko = "완충 (100%)";
+        status_txt = L10n::tr(L10n::StrId::STATUS_FULL);
     } else if (bat.status == "Not charging") {
         if (bat.capacity >= bat.charge_limit) {
-            status_ko = "충전 완료 (" + std::to_string(bat.charge_limit) + "% 보호 한도)";
+            char buf[128];
+            snprintf(buf, sizeof(buf), L10n::tr(L10n::StrId::STATUS_CHARGE_LIMIT_FMT), bat.charge_limit);
+            status_txt = buf;
         } else if (bat.charge_start > 0 && bat.capacity >= bat.charge_start) {
-            status_ko = "충전 대기 (" + std::to_string(bat.charge_start) + "% 이하 재개)";
+            char buf[128];
+            snprintf(buf, sizeof(buf), L10n::tr(L10n::StrId::STATUS_PENDING_RESUME_FMT), bat.charge_start);
+            status_txt = buf;
         } else {
-            status_ko = "충전 대기 (전원 연결됨)";
+            status_txt = L10n::tr(L10n::StrId::STATUS_PENDING_AC);
         }
     } else if (bat.status == "Discharging") {
-        status_ko = "배터리 사용 중";
+        status_txt = L10n::tr(L10n::StrId::STATUS_DISCHARGING);
     } else {
-        status_ko = bat.ac_online ? "충전 대기 (전원 연결됨)" : "배터리 사용 중";
+        status_txt = bat.ac_online ? L10n::tr(L10n::StrId::STATUS_PENDING_AC) : L10n::tr(L10n::StrId::STATUS_DISCHARGING);
     }
 
     std::string time_txt = bat.time_str.empty() ? "" : (" (" + bat.time_str + ")");
-    std::string bat_lbl = "🔋 배터리: " + std::to_string(bat.capacity) + "% - " + status_ko + time_txt;
+    std::string bat_lbl = std::string(L10n::tr(L10n::StrId::MENU_BATTERY_PREFIX)) + std::to_string(bat.capacity) + "% - " + status_txt + time_txt;
     gtk_menu_item_set_label(GTK_MENU_ITEM(header_battery), bat_lbl.c_str());
 
-    std::ostringstream oss_pwr;
-    oss_pwr << std::fixed << std::setprecision(2);
+    char oss_pwr[128];
     if (bat.status == "Charging") {
-        oss_pwr << "⚡ 현재 충전량: +" << bat.power_w << " W (어댑터 충전 중)";
+        snprintf(oss_pwr, sizeof(oss_pwr), L10n::tr(L10n::StrId::MENU_CURRENT_CHARGE_FMT), bat.power_w);
     } else if (bat.status == "Full" || (bat.status == "Not charging" && bat.capacity >= bat.charge_limit)) {
-        oss_pwr << "🔌 외부 AC 전원 연결됨 (보호 한도 " << bat.charge_limit << "% 유지 중)";
+        snprintf(oss_pwr, sizeof(oss_pwr), L10n::tr(L10n::StrId::MENU_AC_MAINTAINING_FMT), bat.charge_limit);
     } else if (bat.ac_online || bat.status == "Not charging") {
-        oss_pwr << "🔌 외부 AC 전원 연결됨 (충전 대기 중)";
+        snprintf(oss_pwr, sizeof(oss_pwr), "%s", L10n::tr(L10n::StrId::MENU_AC_WAITING));
     } else {
-        oss_pwr << "⚡ 현재 사용량: -" << bat.power_w << " W (배터리 사용 중)";
+        snprintf(oss_pwr, sizeof(oss_pwr), L10n::tr(L10n::StrId::MENU_CURRENT_DISCHARGE_FMT), bat.power_w);
     }
-    gtk_menu_item_set_label(GTK_MENU_ITEM(header_power), oss_pwr.str().c_str());
+    gtk_menu_item_set_label(GTK_MENU_ITEM(header_power), oss_pwr);
 
-    std::string prot_lbl = "🛡️ 충전 보호: " + bat.protect_str;
+    std::string prot_lbl = std::string(L10n::tr(L10n::StrId::PROTECT_TITLE)) + bat.protect_str;
     gtk_menu_item_set_label(GTK_MENU_ITEM(header_protect), prot_lbl.c_str());
 
     if (!bat.peripherals.empty()) {
@@ -663,7 +682,7 @@ void PowerTrayApp::update_state_ui() {
         }
         gtk_menu_item_set_label(GTK_MENU_ITEM(header_bt), bt_str.c_str());
     } else {
-        gtk_menu_item_set_label(GTK_MENU_ITEM(header_bt), "🎧 연결된 무선 기기 없음");
+        gtk_menu_item_set_label(GTK_MENU_ITEM(header_bt), L10n::tr(L10n::StrId::DEV_NONE));
     }
 
     updating_ui = false;
@@ -707,16 +726,28 @@ void PowerTrayApp::switch_mode(const std::string &mode_key, const std::string &t
     if (trigger_source == "user") {
         if (mode_key == "ultra") {
             notify_user(
-                "전원 프로파일: [⚡ 극한 초절전 ON]",
-                "시스템: 절전 모드 | 1.4GHz 고정 | 48Hz 다운클럭 | 백라이트MAX\n(※ Wi-Fi와 블루투스는 정상 유지됩니다)",
+                L10n::tr(L10n::StrId::NOTIFY_ULTRA_TITLE),
+                L10n::tr(L10n::StrId::NOTIFY_ULTRA_MSG),
                 "battery-low"
             );
         } else if (mode_key == "save") {
-            notify_user("전원 프로파일: [스마트 절전]", "시스템: 절전 모드 | 1.7GHz 상한 및 백라이트 최적화\n(Wi-Fi, BT, 16스레드 100% 정상 작동)", "battery-profile-powersave-symbolic");
+            notify_user(
+                L10n::tr(L10n::StrId::NOTIFY_SAVE_TITLE),
+                L10n::tr(L10n::StrId::NOTIFY_SAVE_MSG),
+                "battery-profile-powersave-symbolic"
+            );
         } else if (mode_key == "balanced") {
-            notify_user("전원 프로파일: [균형]", "시스템: 균형 모드 | 표준 동적 클럭", "battery-profile-balanced-symbolic");
+            notify_user(
+                L10n::tr(L10n::StrId::NOTIFY_BAL_TITLE),
+                L10n::tr(L10n::StrId::NOTIFY_BAL_MSG),
+                "battery-profile-balanced-symbolic"
+            );
         } else if (mode_key == "performance") {
-            notify_user("전원 프로파일: [성능]", "시스템: 성능 모드 | 4.1GHz CPU 부스트 활성화", "battery-profile-performance-symbolic");
+            notify_user(
+                L10n::tr(L10n::StrId::NOTIFY_PERF_TITLE),
+                L10n::tr(L10n::StrId::NOTIFY_PERF_MSG),
+                "battery-profile-performance-symbolic"
+            );
         }
     }
 
@@ -882,22 +913,22 @@ void PowerTrayApp::setup_dbus_listener() {
 // ==============================================================================
 
 void PowerTrayApp::build_menu() {
-    header_battery = gtk_menu_item_new_with_label("🔋 배터리 정보 로딩 중...");
+    header_battery = gtk_menu_item_new_with_label(L10n::tr(L10n::StrId::MENU_BATTERY_PREFIX));
     gtk_widget_set_sensitive(header_battery, FALSE);
     gtk_widget_show(header_battery);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), header_battery);
 
-    header_power = gtk_menu_item_new_with_label("⚡ 전력 정보 로딩 중...");
+    header_power = gtk_menu_item_new_with_label(L10n::tr(L10n::StrId::POWER_AC_WAITING));
     gtk_widget_set_sensitive(header_power, FALSE);
     gtk_widget_show(header_power);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), header_power);
 
-    header_protect = gtk_menu_item_new_with_label("🛡️ 배터리 보호 로딩 중...");
+    header_protect = gtk_menu_item_new_with_label(L10n::tr(L10n::StrId::PROTECT_TITLE));
     gtk_widget_set_sensitive(header_protect, FALSE);
     gtk_widget_show(header_protect);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), header_protect);
 
-    header_bt = gtk_menu_item_new_with_label("🎧 블루투스 기기 조회 중...");
+    header_bt = gtk_menu_item_new_with_label(L10n::tr(L10n::StrId::DEV_NONE));
     gtk_widget_set_sensitive(header_bt, FALSE);
     gtk_widget_show(header_bt);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), header_bt);
@@ -907,10 +938,10 @@ void PowerTrayApp::build_menu() {
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), sep1);
 
     std::vector<std::pair<std::string, std::string>> modes = {
-        {"performance", "⚡ 성능 (4.1GHz 부스트)"},
-        {"balanced",    "⚖️ 균형 (표준 동적 클럭)"},
-        {"save",        "🍃 스마트 절전 (1.7GHz 상한, 16T 유지)"},
-        {"ultra",       "🛡️ 극한 초절전 (1.4GHz, 48Hz, 백라이트MAX)"}
+        {"performance", L10n::tr(L10n::StrId::MODE_MENU_PERF)},
+        {"balanced",    L10n::tr(L10n::StrId::MODE_MENU_BALANCED)},
+        {"save",        L10n::tr(L10n::StrId::MODE_MENU_SAVE)},
+        {"ultra",       L10n::tr(L10n::StrId::MODE_MENU_ULTRA)}
     };
 
     for (const auto &m : modes) {
@@ -929,7 +960,7 @@ void PowerTrayApp::build_menu() {
     gtk_widget_show(sep2);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), sep2);
 
-    GtkWidget *monitor_item = gtk_menu_item_new_with_label("📈 시스템 모니터 열기 (KDE 성능)");
+    GtkWidget *monitor_item = gtk_menu_item_new_with_label(L10n::tr(L10n::StrId::MENU_SYSTEM_MONITOR));
     g_signal_connect(monitor_item, "activate", G_CALLBACK(monitor_callback), this);
     gtk_widget_show(monitor_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), monitor_item);
@@ -980,6 +1011,9 @@ static void run_pgo_training(size_t iterations) {
 
         std::string dur = format_duration(1.2 + (i % 6) * 0.3);
         (void)dur;
+
+        const char *str_sample = L10n::tr(static_cast<L10n::StrId>(i % static_cast<size_t>(L10n::StrId::COUNT)));
+        (void)str_sample;
     }
     std::cout << "[PGO] Training complete. Profile data captured." << std::endl;
 }
@@ -989,6 +1023,8 @@ static void run_pgo_training(size_t iterations) {
 // ==============================================================================
 
 int main(int argc, char **argv) {
+    setlocale(LC_ALL, "");
+
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--train" || std::string(argv[i]) == "--benchmark") {
             run_pgo_training(500000);

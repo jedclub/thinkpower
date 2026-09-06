@@ -62,7 +62,7 @@ pgo: $(SRC) | $(BIN_DIR)
 	@echo "========================================================="
 
 clean:
-	rm -rf $(BIN_DIR) build src/power-tray pkg src release *.pkg.tar.zst
+	rm -rf $(BIN_DIR) build src/power-tray pkg release *.pkg.tar.zst
 
 pkg:
 	@echo "==> Building native Arch/CachyOS package with makepkg..."

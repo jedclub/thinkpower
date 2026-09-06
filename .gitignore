@@ -13,3 +13,9 @@ pkg/
 release/
 *.pkg.tar.zst
 *.pkg.tar.gz
+*.tar.xz
+*.tar.zst
+*.gcda
+*.gcno
+*.o
+*.so
