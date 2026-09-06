@@ -5,7 +5,7 @@
 # 1. performance : 풀클럭 (4.1GHz 부스트 ON, 최대 성능)
 # 2. balanced    : 기본 균형 (동적 부스트, 패널절전 1단계)
 # 3. save        : 스마트 절전 (아무것도 안 끔, 와이파이/BT/16스레드 100% 유지, 1.7GHz 상한, 패널절전 2)
-# 4. ultra       : 극한 초절전 (와이파이/BT 100% 유지, 1.4GHz, 48Hz, ASPM MAX, I/O 지연, 키보드LED 소등)
+# 4. ultra       : 초절전 (절전과 동일 설정, 와이파이/BT/16스레드 100% 유지, 1.7GHz 상한, 패널절전 2)
 # ==============================================================================
 
 # status 외의 명령 실행 시 루트 권한 필요
@@ -240,101 +240,25 @@ set_save() {
 }
 
 set_ultra() {
-    echo "▶ [극한 초절전 모드] 적용 중 (밝기 20%, GPU 제한, 1.4GHz 고정, 4코어 파킹, TDP 3W 세팅)..."
+    echo "▶ [초절전 모드] 적용 중 (절전과 동일: 와이파이/BT/장치 100% 정상 작동)..."
+    restore_common_hardware
 
-    # [1. CPU & APU 극단 제한 - TDP 3W 목표]
-    # - 터보 부스트 즉시 차단
+    # 1. CPU: 1.7GHz 상한 (부스트만 OFF, 8코어 16스레드 유지, schedutil 반응성 유지)
     [ -w /sys/devices/system/cpu/cpufreq/boost ] && echo 0 > /sys/devices/system/cpu/cpufreq/boost
-    # - 주파수 상한(scaling_max_freq)을 시스템 최저 클럭(1.4GHz)으로 영구 락다운
-    for sf in /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq; do
-        [ -w "$sf" ] && echo 1400000 > "$sf" 2>/dev/null || true
-    done
-    # - powersave 거버너: 1.4GHz 최저 전압 바닥 고정
     for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-        [ -w "$g" ] && echo powersave > "$g" 2>/dev/null || true
+        [ -w "$g" ] && echo schedutil > "$g"
     done
-    # - SMT 가상스레드 OFF (16스레드 -> 8물리코어)
-    [ -w /sys/devices/system/cpu/smt/control ] && echo off > /sys/devices/system/cpu/smt/control
-    # - 4코어 코어 파킹 (CCX 1의 CPU 8~15 완전 오프라인 -> 4C/4T 구동으로 누설전류 차단 및 3W 달성)
-    for c in /sys/devices/system/cpu/cpu{8..15}/online; do
-        [ -w "$c" ] && echo 0 > "$c" 2>/dev/null || true
-    done
-    # - ryzenadj: 3W 하드웨어 파워캡 (설치 시 즉시 발동, STAPM 3W / Fast 3.5W / Slow 3W)
-    command -v ryzenadj >/dev/null 2>&1 && ryzenadj --stapm-limit=3000 --fast-limit=3500 --slow-limit=3000 --apu-slow-limit=3000 --tctl-temp=50 >/dev/null 2>&1 || true
-
-    # [2. 디스플레이 & KDE Plasma 순간 극한 최적화 (24FPS, 블러 차단, 애니메이션 0, 밝기 20%)]
-    # - 주사율 48Hz 다운클럭 (화면 스캔아웃 엔진 전력 절감)
-    run_as_user kscreen-doctor output.1.mode.2
-
-    # - 1번: KWin 컴포지터 렌더링 업데이트 레이트 24FPS 강제 제한
-    run_as_user kwriteconfig6 --file kwinrc --group Compositing --key MaxFPS 24
-    run_as_user kwriteconfig6 --file kwinrc --group Compositing --key RefreshRate 24
-
-    # - 3번: 창 애니메이션 계산 완전 차단 (AnimationDurationFactor = 0, AnimationSpeed = 0)
-    local cur_anim
-    cur_anim=$(run_as_user kreadconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor 2>/dev/null || echo "0.25")
-    [ -n "$cur_anim" ] && echo "$cur_anim" > "$KDE_ANIM_BACKUP"
-    chmod 666 "$KDE_ANIM_BACKUP" 2>/dev/null || true
-    run_as_user kwriteconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor 0
-    run_as_user kwriteconfig6 --file kwinrc --group Compositing --key AnimationSpeed 0
-    run_as_user qdbus6 org.kde.KWin /KWin reconfigure
-
-    # - 2번: 무거운 GPU 셰이더 효과(블러, 슬라이딩, 페이드 등) 즉각 차단(언로드)
-    for eff in $KWIN_HEAVY_EFFECTS; do
-        run_as_user qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.unloadEffect "$eff"
-    done
-
-    # - 패널 백라이트 적응형 절전 레벨 4 (최대 절감)
-    [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 4 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
-    # - GPU DPM 최저 고정 (sclk 200MHz 바닥으로 제한, 최대 1600MHz의 12.5% 수준으로 억제)
-    [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo low > /sys/class/drm/card1/device/power_dpm_force_performance_level
-    # - 화면 물리 밝기 20% 상한 강제 (현재 밝기 백업 후 20% 초과 시 20%로 하향)
-    for bl in /sys/class/backlight/*; do
-        if [ -r "$bl/brightness" ] && [ -r "$bl/max_brightness" ] && [ -w "$bl/brightness" ]; then
-            CUR_BRIGHT=$(cat "$bl/brightness" 2>/dev/null || echo "0")
-            MAX_BRIGHT=$(cat "$bl/max_brightness" 2>/dev/null || echo "100")
-            TARGET_BRIGHT=$(( MAX_BRIGHT * 20 / 100 ))
-            [ "$TARGET_BRIGHT" -lt 1 ] && TARGET_BRIGHT=1
-            if [ "$CUR_BRIGHT" -gt "$TARGET_BRIGHT" ]; then
-                echo "$CUR_BRIGHT" > "$DISP_BACKUP"
-                chmod 666 "$DISP_BACKUP" 2>/dev/null || true
-                echo "$TARGET_BRIGHT" > "$bl/brightness" 2>/dev/null || true
-            fi
-        fi
-    done
-
-    # [3. PCIe 버스 & NVMe SSD 딥슬립]
-    # - PCIe ASPM 초절전 정책 강제 (L1.1 / L1.2 링크 슬립 강제)
-    [ -w /sys/module/pcie_aspm/parameters/policy ] && echo powersupersave > /sys/module/pcie_aspm/parameters/policy
-    # - 리눅스 커널 랩톱 모드 5 (디스크 쓰기 버퍼링을 묶어 SSD가 수분간 깨어나지 않게 유지)
-    echo 5 > /proc/sys/vm/laptop_mode 2>/dev/null || true
-    echo 6000 > /proc/sys/vm/dirty_writeback_centisecs 2>/dev/null || true
-    # - 모든 PCIe 디바이스 슬립 활성화
-    command -v powertop >/dev/null 2>&1 && powertop --auto-tune >/dev/null 2>&1 || true
-
-    # [4. 오디오 & 씽크패드 EC & 외장 누수 차단]
-    # - 무음 시 1초만에 오디오 코덱 전원 차단
-    [ -w /sys/module/snd_hda_intel/parameters/power_save ] && echo 1 > /sys/module/snd_hda_intel/parameters/power_save
-    # - ThinkPad 저전력 플랫폼 프로파일 (팬 최저 또는 정지)
+    # 2. ThinkPad EC: 저소음/저발열 프로파일
     [ -w /sys/firmware/acpi/platform_profile ] && echo low-power > /sys/firmware/acpi/platform_profile
-    # - 키보드 백라이트 이전 상태 백업 후 소등
-    if [ -r /sys/class/leds/tpacpi::kbd_backlight/brightness ]; then
-        CUR_KBD=$(cat /sys/class/leds/tpacpi::kbd_backlight/brightness 2>/dev/null || echo "0")
-        if [ "$CUR_KBD" -gt 0 ]; then
-            echo "$CUR_KBD" > "$KBD_BACKUP"
-            chmod 666 "$KBD_BACKUP" 2>/dev/null || true
-        fi
-    fi
-    [ -w /sys/class/leds/tpacpi::kbd_backlight/brightness ] && echo 0 > /sys/class/leds/tpacpi::kbd_backlight/brightness
-    # - Baloo 파일 색인 중단 (CPU/SSD 불필요한 웨이크업 원천 방지)
-    run_as_user balooctl6 suspend
-
-    # [5. PPD 동기화 및 알림] (power-tray 미사용 단독 CLI 실행 시에만 동기화 및 알림)
+    # 3. GPU & Panel: 적응형 백라이트 절전 2단계 (색 왜곡 없이 백라이트 절감)
+    [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 2 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
+    [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo low > /sys/class/drm/card1/device/power_dpm_force_performance_level
+    # 4. PCIe Runtime PM
+    command -v powertop >/dev/null 2>&1 && powertop --auto-tune >/dev/null 2>&1 || true
+    # 5. PPD 및 알림 (power-tray 미사용 단독 CLI 실행 시에만 동기화 및 알림)
     if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
         powerprofilesctl set power-saver >/dev/null 2>&1 || true
-        run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -u critical -i battery-low -t 5000 \
-            "전원 프로파일: [⚡ 극한 초절전 ON]" \
-            "1.4GHz(4C) | 밝기 20% | 24FPS 제한 | 블러/애니 차단 | TDP 3W\n(※ Wi-Fi 및 블루투스는 정상 유지됩니다)"
+        run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-powersave-symbolic -t 3000 "전원 프로파일: [초절전]" "절전과 동일 설정 (1.7GHz 상한, GPU low)\n(Wi-Fi, 블루투스, 16스레드 100% 유지)"
     fi
 
     update_state_file "ultra"
