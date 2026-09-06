@@ -181,6 +181,26 @@ struct RadioCallbackData {
 // ==============================================================================
 
 PowerTrayApp::PowerTrayApp() {
+    // Check if system was rebooted to clear stale ultra/save state
+    std::string boot_id_file = get_cache_dir() + "/power_profile_boot_id";
+    std::string cur_boot_id;
+    std::ifstream boot_in("/proc/sys/kernel/random/boot_id");
+    if (boot_in.is_open()) {
+        boot_in >> cur_boot_id;
+    }
+    std::string last_boot_id;
+    std::ifstream last_boot_in(boot_id_file);
+    if (last_boot_in.is_open()) {
+        last_boot_in >> last_boot_id;
+    }
+    if (!cur_boot_id.empty() && cur_boot_id != last_boot_id) {
+        set_current_mode("balanced");
+        std::ofstream boot_out(boot_id_file);
+        if (boot_out.is_open()) {
+            boot_out << cur_boot_id << std::endl;
+        }
+    }
+
     current_mode = get_current_mode();
     if (current_mode.empty()) current_mode = "balanced";
 
@@ -202,9 +222,10 @@ PowerTrayApp::PowerTrayApp() {
 }
 
 PowerTrayApp::~PowerTrayApp() {
-    if (get_current_mode() == "ultra") {
-        std::string cmd = get_manager_bin() + " restore --internal >/dev/null 2>&1 &";
-        system(cmd.c_str());
+    if (get_current_mode() != "balanced") {
+        std::string cmd = "sudo -n " + get_manager_bin() + " restore --internal >/dev/null 2>&1";
+        int ret = system(cmd.c_str());
+        (void)ret;
     }
     if (dbus_conn && dbus_sub_id > 0) {
         g_dbus_connection_signal_unsubscribe(dbus_conn, dbus_sub_id);
@@ -1057,7 +1078,7 @@ void PowerTrayApp::on_restore_clicked() {
     g_spawn_command_line_async(cmd_mgr.c_str(), nullptr);
     notify_user(
         L10n::is_korean() ? "전원 프로파일: [안전 복구 완료]" : "Power Profile: [Failsafe Restored]",
-        L10n::is_korean() ? "모든 CPU 코어(16스레드), 화면 주사율(60Hz), 데스크톱 효과가 기본값으로 복구되었습니다." : "All CPU cores, refresh rates, and desktop effects restored to default.",
+        L10n::is_korean() ? "모든 CPU 코어(16스레드), SMU TDP 락 해제(25W), 화면 주사율(60Hz), 데스크톱 효과가 기본값으로 복구되었습니다." : "All CPU cores, SMU TDP lock released (25W), refresh rates, and desktop effects restored to default.",
         "security-high"
     );
 }
@@ -1100,9 +1121,10 @@ static PowerTrayApp *g_app_instance = nullptr;
 static void clean_exit_handler(int sig) {
     (void)sig;
     if (g_app_instance) {
-        if (g_app_instance->get_current_mode() == "ultra") {
-            std::string cmd = g_app_instance->get_manager_bin() + " restore --internal >/dev/null 2>&1 &";
-            system(cmd.c_str());
+        if (g_app_instance->get_current_mode() != "balanced") {
+            std::string cmd = "sudo -n " + g_app_instance->get_manager_bin() + " restore --internal >/dev/null 2>&1";
+            int ret = system(cmd.c_str());
+            (void)ret;
         }
     }
     gtk_main_quit();

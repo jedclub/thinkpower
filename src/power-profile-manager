@@ -9,13 +9,18 @@
 # ==============================================================================
 
 # status 외의 명령 실행 시 루트 권한 필요 (tp-ppm 등 단축 심볼릭 링크 지원을 위해 실제 바이너리 경로 확인)
-if [ "$1" != "status" ] && [ "$EUID" -ne 0 ]; then
+# status 조회 시에도 무암호 sudo가 가능하면 하드웨어 SMU 상태 조회를 위해 루트로 자동 실행
+if [ "$EUID" -ne 0 ]; then
     REAL_SCRIPT="$(readlink -f "$0" 2>/dev/null || echo "$0")"
-    sudo -n "$REAL_SCRIPT" "$@" && exit 0
-    if command -v pkexec >/dev/null 2>&1; then
-        exec pkexec "$REAL_SCRIPT" "$@"
-    else
-        exec sudo "$REAL_SCRIPT" "$@"
+    if sudo -n "$REAL_SCRIPT" "$@" 2>/dev/null; then
+        exit 0
+    fi
+    if [ "$1" != "status" ]; then
+        if command -v pkexec >/dev/null 2>&1; then
+            exec pkexec "$REAL_SCRIPT" "$@"
+        else
+            exec sudo "$REAL_SCRIPT" "$@"
+        fi
     fi
 fi
 
@@ -72,10 +77,34 @@ update_state_file() {
     mv -f "${STATE_FILE}.tmp" "$STATE_FILE"
 }
 
-if [ ! -f "$STATE_FILE" ]; then
+find_ryzenadj() {
+    if [ -x "${USER_HOME}/.local/bin/ryzenadj" ]; then
+        echo "${USER_HOME}/.local/bin/ryzenadj"
+    elif command -v ryzenadj >/dev/null 2>&1; then
+        echo "ryzenadj"
+    elif [ -x "/usr/local/bin/ryzenadj" ]; then
+        echo "/usr/local/bin/ryzenadj"
+    elif [ -x "/usr/bin/ryzenadj" ]; then
+        echo "/usr/bin/ryzenadj"
+    fi
+}
+
+BOOT_ID_FILE="${CACHE_DIR}/power_profile_boot_id"
+CUR_BOOT_ID=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo "")
+LAST_BOOT_ID=$(cat "$BOOT_ID_FILE" 2>/dev/null || echo "")
+
+if [ -n "$CUR_BOOT_ID" ] && [ "$CUR_BOOT_ID" != "$LAST_BOOT_ID" ]; then
+    # 신규 부팅 감지: 이전 부팅 세션 잔여 상태 및 백업 파일 정리, 균형(balanced) 모드로 안전 초기화
     echo "balanced" > "$STATE_FILE"
-    chown "$REAL_USER:" "$STATE_FILE" 2>/dev/null || true
-    chmod 666 "$STATE_FILE" 2>/dev/null || true
+    echo "$CUR_BOOT_ID" > "$BOOT_ID_FILE"
+    rm -f "$KBD_BACKUP" "$DISP_BACKUP" "$KDE_ANIM_BACKUP" 2>/dev/null || true
+    chown "$REAL_USER:" "$STATE_FILE" "$BOOT_ID_FILE" 2>/dev/null || true
+    chmod 666 "$STATE_FILE" "$BOOT_ID_FILE" 2>/dev/null || true
+elif [ ! -f "$STATE_FILE" ]; then
+    echo "balanced" > "$STATE_FILE"
+    [ -n "$CUR_BOOT_ID" ] && echo "$CUR_BOOT_ID" > "$BOOT_ID_FILE"
+    chown "$REAL_USER:" "$STATE_FILE" "$BOOT_ID_FILE" 2>/dev/null || true
+    chmod 666 "$STATE_FILE" "$BOOT_ID_FILE" 2>/dev/null || true
 else
     chown "$REAL_USER:" "$STATE_FILE" 2>/dev/null || true
     chmod 666 "$STATE_FILE" 2>/dev/null || true
@@ -107,11 +136,17 @@ restore_common_hardware() {
     for c in /sys/devices/system/cpu/cpu[0-9]*/online; do
         [ -w "$c" ] && echo 1 > "$c" 2>/dev/null || true
     done
-    # CPU 클럭 상한(scaling_max_freq) 원복
+    # CPU 클럭 상한(scaling_max_freq) 및 하한(scaling_min_freq) 원복
     for mf in /sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_max_freq; do
         dir=$(dirname "$mf")
         if [ -r "$mf" ] && [ -w "$dir/scaling_max_freq" ]; then
             cat "$mf" > "$dir/scaling_max_freq" 2>/dev/null || true
+        fi
+    done
+    for mf in /sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_min_freq; do
+        dir=$(dirname "$mf")
+        if [ -r "$mf" ] && [ -w "$dir/scaling_min_freq" ]; then
+            cat "$mf" > "$dir/scaling_min_freq" 2>/dev/null || true
         fi
     done
 
@@ -125,8 +160,17 @@ restore_common_hardware() {
             echo "c" > "$gpu_dev/pp_od_clk_voltage" 2>/dev/null || true
         fi
     fi
-    # ryzenadj 전력 상한 복원 (설치되어 있을 경우)
-    command -v ryzenadj >/dev/null 2>&1 && ryzenadj --stapm-limit=25000 --fast-limit=30000 --slow-limit=25000 --tctl-temp=95 >/dev/null 2>&1 || true
+    # ryzenadj 전력 상한 복원 (설치되어 있을 경우 - 25W OEM 팩토리 최대 기본값)
+    local radj
+    radj=$(find_ryzenadj)
+    [ -n "$radj" ] && "$radj" --stapm-limit=25000 --fast-limit=30000 --slow-limit=25000 --tctl-temp=95 >/dev/null 2>&1 || true
+
+    # 강제 복구(Failsafe) 시 USB 장치 절전 해제
+    if [ "$force_all" -eq 1 ]; then
+        for u in /sys/bus/usb/devices/*/power/control; do
+            [ -w "$u" ] && echo on > "$u" 2>/dev/null || true
+        done
+    fi
 
     # [3. KDE Plasma & 디스플레이 완전 복구]
     # 이전 모드가 ultra였거나 백업 파일이 존재하거나 강제 복구 모드인 경우 실행
@@ -158,13 +202,20 @@ restore_common_hardware() {
     fi
 
     # [4. 키보드 백라이트 이전 상태 안전 복원]
+    local kbd_dev="/sys/class/leds/tpacpi::kbd_backlight/brightness"
     if [ -f "$KBD_BACKUP" ]; then
         local prev_kbd
         prev_kbd=$(cat "$KBD_BACKUP" 2>/dev/null || echo "1")
-        if echo "$prev_kbd" | grep -Eq '^[0-9]+$' && [ "$prev_kbd" -gt 0 ] && [ -w /sys/class/leds/tpacpi::kbd_backlight/brightness ]; then
-            echo "$prev_kbd" > /sys/class/leds/tpacpi::kbd_backlight/brightness
+        if echo "$prev_kbd" | grep -Eq '^[0-9]+$' && [ "$prev_kbd" -gt 0 ] && [ -w "$kbd_dev" ]; then
+            echo "$prev_kbd" > "$kbd_dev" 2>/dev/null || true
         fi
         rm -f "$KBD_BACKUP"
+    elif [ "$force_all" -eq 1 ] && [ -w "$kbd_dev" ]; then
+        local cur_kbd
+        cur_kbd=$(cat "$kbd_dev" 2>/dev/null || echo "0")
+        if [ "$cur_kbd" -eq 0 ]; then
+            echo 1 > "$kbd_dev" 2>/dev/null || true
+        fi
     fi
 
     # [5. 디스플레이 화면 밝기 안전 복원]
@@ -206,13 +257,16 @@ set_performance() {
     done
     # 2. ThinkPad EC & ACPI
     [ -w /sys/firmware/acpi/platform_profile ] && echo performance > /sys/firmware/acpi/platform_profile
-    # 3. GPU & Panel
+    # 3. AMD SMU 하드웨어 TDP 락 (STAPM 25W, Fast 30W, Slow 25W, 온도 95°C)
+    local radj; radj=$(find_ryzenadj)
+    [ -n "$radj" ] && "$radj" --stapm-limit=25000 --fast-limit=30000 --slow-limit=25000 --tctl-temp=95 >/dev/null 2>&1 || true
+    # 4. GPU & Panel
     [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 0 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
     [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo auto > /sys/class/drm/card1/device/power_dpm_force_performance_level
-    # 4. PPD 및 알림 (power-tray 미사용 단독 CLI 실행 시에만 동기화 및 알림)
+    # 5. PPD 및 알림 (power-tray 미사용 단독 CLI 실행 시에만 동기화 및 알림)
     if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
         powerprofilesctl set performance >/dev/null 2>&1 || true
-        run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-performance-symbolic -t 3000 "전원 프로파일: [성능]" "CPU 부스트(4.1GHz) 활성화, 최대 성능"
+        run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-performance-symbolic -t 3000 "전원 프로파일: [성능]" "CPU 부스트(4.1GHz) 및 SMU 25W 풀파워 활성화"
     fi
 }
 
@@ -228,15 +282,18 @@ set_balanced() {
     done
     # 2. ThinkPad EC & ACPI
     [ -w /sys/firmware/acpi/platform_profile ] && echo balanced > /sys/firmware/acpi/platform_profile
-    # 3. GPU & Panel
+    # 3. AMD SMU 하드웨어 TDP 락 (STAPM 18W, Fast 22W, Slow 18W, 온도 85°C)
+    local radj; radj=$(find_ryzenadj)
+    [ -n "$radj" ] && "$radj" --stapm-limit=18000 --fast-limit=22000 --slow-limit=18000 --tctl-temp=85 >/dev/null 2>&1 || true
+    # 4. GPU & Panel
     [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 1 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
     [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo auto > /sys/class/drm/card1/device/power_dpm_force_performance_level
-    # 4. PCIe Runtime PM
+    # 5. PCIe Runtime PM
     command -v powertop >/dev/null 2>&1 && powertop --auto-tune >/dev/null 2>&1 || true
-    # 5. PPD 및 알림 (power-tray 미사용 단독 CLI 실행 시에만 동기화 및 알림)
+    # 6. PPD 및 알림 (power-tray 미사용 단독 CLI 실행 시에만 동기화 및 알림)
     if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
         powerprofilesctl set balanced >/dev/null 2>&1 || true
-        run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-balanced-symbolic -t 3000 "전원 프로파일: [균형]" "표준 동적 클럭 및 전력 관리"
+        run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-balanced-symbolic -t 3000 "전원 프로파일: [균형]" "표준 동적 클럭 및 SMU 18W 전력 관리"
     fi
 }
 
@@ -252,21 +309,24 @@ set_save() {
     done
     # 2. ThinkPad EC: 저소음/저발열 프로파일
     [ -w /sys/firmware/acpi/platform_profile ] && echo low-power > /sys/firmware/acpi/platform_profile
-    # 3. GPU & Panel: 적응형 백라이트 절전 2단계 (색 왜곡 없이 백라이트 절감)
+    # 3. AMD SMU 하드웨어 TDP 락 (STAPM 10W, Fast 12W, Slow 10W, 온도 75°C)
+    local radj; radj=$(find_ryzenadj)
+    [ -n "$radj" ] && "$radj" --stapm-limit=10000 --fast-limit=12000 --slow-limit=10000 --tctl-temp=75 >/dev/null 2>&1 || true
+    # 4. GPU & Panel: 적응형 백라이트 절전 2단계 (색 왜곡 없이 백라이트 절감)
     [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 2 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
     # GPU DPM은 auto로 두어 화면 렌더링에 필요한 클럭을 정상 공급
     [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo auto > /sys/class/drm/card1/device/power_dpm_force_performance_level
-    # 4. PCIe Runtime PM
+    # 5. PCIe Runtime PM
     command -v powertop >/dev/null 2>&1 && powertop --auto-tune >/dev/null 2>&1 || true
-    # 5. PPD 및 알림 (power-tray 미사용 단독 CLI 실행 시에만 동기화 및 알림)
+    # 6. PPD 및 알림 (power-tray 미사용 단독 CLI 실행 시에만 동기화 및 알림)
     if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
         powerprofilesctl set power-saver >/dev/null 2>&1 || true
-        run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-powersave-symbolic -t 3000 "전원 프로파일: [스마트 절전]" "부스트 OFF(1.7GHz 상한) 및 발열 억제\n(Wi-Fi, 블루투스, 16스레드 100% 유지)"
+        run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-powersave-symbolic -t 3000 "전원 프로파일: [스마트 절전]" "부스트 OFF(1.7GHz 상한) 및 SMU 10W 제한\n(Wi-Fi, 블루투스, 16스레드 100% 유지)"
     fi
 }
 
 set_ultra() {
-    echo "▶ [초절전 모드] 안전 적용 중 (16스레드 유지, CPU 1.4GHz, GPU 50% 제한, 터보 부스트 OFF)..."
+    echo "▶ [초절전 모드] 안전 적용 중 (16스레드 유지, CPU 1.4GHz, SMU 6W 하드웨어 락, GPU 50% 제한)..."
     restore_common_hardware
     update_state_file "ultra"
 
@@ -282,7 +342,11 @@ set_ultra() {
     # 2. ThinkPad EC: 저소음/저발열 프로파일 (패키지 TDP 억제)
     [ -w /sys/firmware/acpi/platform_profile ] && echo low-power > /sys/firmware/acpi/platform_profile
 
-    # 3. GPU 제한: 정확한 50% 상한 (800MHz Cap, 200MHz 바닥 락 절대 금지!)
+    # 3. AMD SMU 하드웨어 TDP 락 (STAPM 6W, Fast 8W, Slow 6W, 온도 65°C)
+    local radj; radj=$(find_ryzenadj)
+    [ -n "$radj" ] && "$radj" --stapm-limit=6000 --fast-limit=8000 --slow-limit=6000 --tctl-temp=65 >/dev/null 2>&1 || true
+
+    # 4. GPU 제한: 정확한 50% 상한 (800MHz Cap, 200MHz 바닥 락 절대 금지!)
     local gpu_dev="/sys/class/drm/card1/device"
     [ ! -d "$gpu_dev" ] && gpu_dev="/sys/class/drm/card0/device"
     if [ -d "$gpu_dev" ]; then
@@ -424,12 +488,23 @@ show_status() {
     fi
     echo "  - CPU Idle 거버너 : $IDLE_GOV"
     echo "  - RAM THP/스왑니스: $THP / swappiness $SWAP_VAL"
+    local radj
+    radj=$(find_ryzenadj)
+    if [ -n "$radj" ] && [ "$EUID" -eq 0 ]; then
+        local stapm_cur
+        stapm_cur=$("$radj" -i 2>/dev/null | grep -i "STAPM LIMIT" | awk -F'|' '{print $3}' | tr -d '[:space:]')
+        if [ -n "$stapm_cur" ]; then
+            echo "  - AMD SMU TDP 락 : ${stapm_cur}W (STAPM 하드웨어 제한)"
+        else
+            echo "  - AMD SMU TDP    : ryzenadj 연동 가능"
+        fi
+    fi
     echo "=========================================="
 }
 
 set_restore() {
     echo "▶ [안전 복구 (Failsafe Reset)] 실행 중..."
-    echo "  - 모든 CPU 코어, 클럭, 화면 주사율, KDE 효과를 기본값으로 강제 복구합니다."
+    echo "  - 모든 CPU 코어, 클럭, AMD SMU TDP(25W 언락), 화면 주사율, KDE 효과를 기본값으로 강제 복구합니다."
 
     restore_common_hardware 1
 
@@ -444,11 +519,22 @@ set_restore() {
     [ -w /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings ] && echo 1 > /sys/class/drm/card1-eDP-1/amdgpu/panel_power_savings 2>/dev/null || true
     [ -w /sys/class/drm/card1/device/power_dpm_force_performance_level ] && echo auto > /sys/class/drm/card1/device/power_dpm_force_performance_level
 
-    # 4. PPD 및 알림
+    # 4. AMD SMU 하드웨어 TDP 팩토리 언락 (STAPM 25W, Fast 30W, Slow 25W, 온도 95°C)
+    local radj; radj=$(find_ryzenadj)
+    [ -n "$radj" ] && "$radj" --stapm-limit=25000 --fast-limit=30000 --slow-limit=25000 --tctl-temp=95 >/dev/null 2>&1 || true
+
+    # 5. PPD 동기화
     powerprofilesctl set balanced >/dev/null 2>&1 || true
-    run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i security-high -t 4000 \
-        "전원 프로파일: [안전 복구 완료]" \
-        "모든 CPU 코어(16스레드), 화면 주사율(60Hz), KDE 블러 및 효과가 기본값으로 복구되었습니다."
+
+    # 6. 잔여 백업 파일 완전 정리
+    rm -f "$KBD_BACKUP" "$DISP_BACKUP" "$KDE_ANIM_BACKUP" 2>/dev/null || true
+
+    # 7. 알림 (power-tray 미사용 단독 CLI 실행 시에만 알림)
+    if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
+        run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i security-high -t 4000 \
+            "전원 프로파일: [안전 복구 완료]" \
+            "모든 CPU 코어(16스레드), 부스트 ON, SMU TDP 락 해제(25W), 화면 및 KDE 효과가 기본값으로 복구되었습니다."
+    fi
 
     update_state_file "balanced"
     echo "✔ 안전 복구가 완료되었습니다. (균형 모드 전환)"

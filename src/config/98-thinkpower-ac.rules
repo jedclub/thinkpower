@@ -1,3 +1,3 @@
 # ThinkPower AC Power Connection Failsafe Recovery Trigger
 # Automatically switches out of Ultra/Save into Balanced mode when charger is plugged in
-SUBSYSTEM=="power_supply", ATTR{online}=="1", RUN+="/usr/local/bin/power-profile-manager ac-event"
+SUBSYSTEM=="power_supply", ATTR{online}=="1", RUN+="/bin/sh -c '[ -x /usr/bin/power-profile-manager ] && exec /usr/bin/power-profile-manager ac-event; [ -x /usr/local/bin/power-profile-manager ] && exec /usr/local/bin/power-profile-manager ac-event'"

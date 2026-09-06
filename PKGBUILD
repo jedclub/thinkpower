@@ -41,6 +41,7 @@ package() {
     # 4. Desktop entries
     install -Dm644 packaging/power-tray.desktop "$pkgdir/etc/xdg/autostart/power-tray.desktop"
     install -Dm644 packaging/power-ultra.desktop "$pkgdir/usr/share/applications/power-ultra.desktop"
+    install -Dm644 packaging/power-restore.desktop "$pkgdir/usr/share/applications/power-restore.desktop"
 
     # 5. Documentation & License
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"

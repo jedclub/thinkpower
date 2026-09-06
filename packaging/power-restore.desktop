@@ -1,0 +1,15 @@
+[Desktop Entry]
+Name=ThinkPower Failsafe Reset (Restore Defaults)
+Name[ko]=안전 복구 (기본값 원복)
+Name[ja]=フェイルセーフ復旧 (初期値に戻す)
+Name[zh_CN]=安全恢复 (恢复默认值)
+Name[zh_TW]=安全復原 (恢復預設值)
+Comment=Emergency reset of all CPU clocks, SMU TDP limits, refresh rates, and desktop effects
+Comment[ko]=CPU 클럭, SMU TDP 락(25W 언락), 화면 주사율(60Hz), 데스크톱 효과 비상 안전 복구
+Exec=/usr/bin/power-profile-manager restore
+Icon=security-high
+Terminal=false
+Type=Application
+Categories=System;Settings;Utility;
+Keywords=power;restore;reset;failsafe;복구;초기화;전원;리셋;안전;
+StartupNotify=false
