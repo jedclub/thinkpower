@@ -56,15 +56,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Determine Version
+      - name: Determine Version & Tag
         id: get_version
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VER="${{ github.event.inputs.version }}"
+            TAG="v${VER}"
           else
-            VER="${GITHUB_REF#refs/tags/v}"
+            TAG="${GITHUB_REF#refs/tags/}"
+            VER="${TAG#v}"
           fi
           echo "VERSION=${VER}" >> $GITHUB_OUTPUT
+          echo "TAG=${TAG}" >> $GITHUB_OUTPUT
 
       - name: Install build dependencies
         run: |
@@ -109,7 +112,7 @@ jobs:
       - name: Create GitHub Release & Upload Assets
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name || format('v{0}', steps.get_version.outputs.VERSION) }}
+          tag_name: ${{ steps.get_version.outputs.TAG }}
           name: "ThinkPower v${{ steps.get_version.outputs.VERSION }}"
           draft: false
           prerelease: false
