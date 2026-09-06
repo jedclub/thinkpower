@@ -98,6 +98,7 @@ assert_output_contains "Failsafe: Auto charger trigger handler exists" "handle_a
 assert_output_contains "Failsafe: Restore unfreezes and resumes all background daemons" "killall -CONT ksystemstats" grep "killall -CONT ksystemstats" "${ROOT_DIR}/src/power-profile-manager"
 assert_output_contains "Failsafe: Restore reverts screen refresh rate to 60Hz" "output.1.mode" grep "output.1.mode" "${ROOT_DIR}/src/power-profile-manager"
 assert_output_contains "Failsafe: Restore unblocks Wi-Fi radio" "rfkill unblock wifi" grep "rfkill unblock wifi" "${ROOT_DIR}/src/power-profile-manager"
+assert_output_contains "Failsafe: Restore reauthorizes USB camera" "authorized" grep "authorized" "${ROOT_DIR}/src/power-profile-manager"
 
 # ------------------------------------------------------------------------------
 # 4. Silicon & Hardware Tuning Constraints
@@ -116,7 +117,9 @@ assert_output_contains "Ultra mode switches screen refresh rate to 48Hz DRRS" "o
 assert_output_contains "Ultra mode powers down uncarrier Ethernet PHY" "ethtool -s" grep "ethtool -s" "${ROOT_DIR}/src/power-profile-manager"
 assert_output_contains "Ultra mode mutes microphone capture ADC" "set-mute @DEFAULT_AUDIO_SOURCE@ 1" grep "set-mute @DEFAULT_AUDIO_SOURCE@ 1" "${ROOT_DIR}/src/power-profile-manager"
 assert_output_contains "Ultra mode cuts unassociated Wi-Fi radio" "rfkill block wifi" grep "rfkill block wifi" "${ROOT_DIR}/src/power-profile-manager"
+assert_output_contains "Ultra mode deauthorizes USB camera" "echo 0 > \"\$cam_path/authorized\"" grep "authorized" "${ROOT_DIR}/src/power-profile-manager"
 assert_output_contains "Smart Save powers down uncarrier Ethernet PHY" "ETH_DOWN_BACKUP" grep "ETH_DOWN_BACKUP" "${ROOT_DIR}/src/power-profile-manager"
+assert_output_contains "Smart Save deauthorizes USB camera and mutes mic" "MIC_MUTE_BACKUP" grep "MIC_MUTE_BACKUP" "${ROOT_DIR}/src/power-profile-manager"
 
 # ------------------------------------------------------------------------------
 # 5. Compiled Binary Verification (if bin/power-tray exists)

@@ -87,6 +87,7 @@ DISPLAY_MODE_BACKUP="${CACHE_DIR}/prev_display_mode"
 ETH_DOWN_BACKUP="${CACHE_DIR}/prev_eth_down"
 MIC_MUTE_BACKUP="${CACHE_DIR}/prev_mic_mute"
 WIFI_BACKUP="${CACHE_DIR}/prev_wifi_state"
+CAM_BACKUP="${CACHE_DIR}/prev_cam_state"
 KWIN_HEAVY_EFFECTS="blur slidingpopups slidingnotifications slide squash scale fadingpopups blendchanges"
 
 # --internal / --quiet 플래그 확인 (power-tray 등 내부 호출 시 중복 PPD/알림 차단)
@@ -341,6 +342,20 @@ restore_common_hardware() {
         rm -f "$WIFI_BACKUP" 2>/dev/null || true
         rfkill unblock wifi >/dev/null 2>&1 || true
     fi
+
+    # [12. 웹캠(Camera) 하드웨어 전원 복원]
+    if [ -f "$CAM_BACKUP" ] || [ "$force_all" -eq 1 ]; then
+        if [ -f "$CAM_BACKUP" ]; then
+            while read -r cam_path; do
+                [ -d "$cam_path" ] && echo 1 > "$cam_path/authorized" 2>/dev/null || true
+            done < "$CAM_BACKUP"
+            rm -f "$CAM_BACKUP" 2>/dev/null || true
+        elif [ "$force_all" -eq 1 ]; then
+            for cam_path in /sys/bus/usb/devices/*; do
+                [ -f "$cam_path/product" ] && grep -qi "camera" "$cam_path/product" 2>/dev/null && echo 1 > "$cam_path/authorized" 2>/dev/null || true
+            done
+        fi
+    fi
 }
 
 set_performance() {
@@ -446,10 +461,29 @@ set_save() {
         fi
     fi
 
-    # 8. PPD 및 알림 (power-tray 미사용 단독 CLI 실행 시에만 동기화 및 알림)
+    # 8. 마이크 ADC 아날로그 회로 절전 & 웹캠 하드웨어 차단
+    if [ ! -f "$MIC_MUTE_BACKUP" ]; then
+        local mic_vol; mic_vol=$(run_as_user wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null || echo "")
+        if echo "$mic_vol" | grep -qi "\[MUTED\]"; then
+            echo 1 > "$MIC_MUTE_BACKUP"
+        else
+            echo 0 > "$MIC_MUTE_BACKUP"
+            run_as_user wpctl set-mute @DEFAULT_AUDIO_SOURCE@ 1 >/dev/null 2>&1 || true
+        fi
+        chmod 666 "$MIC_MUTE_BACKUP" 2>/dev/null || true
+    fi
+    for cam_path in /sys/bus/usb/devices/*; do
+        if [ -f "$cam_path/product" ] && grep -qi "camera" "$cam_path/product" 2>/dev/null; then
+            echo "$cam_path" >> "$CAM_BACKUP"
+            echo 0 > "$cam_path/authorized" 2>/dev/null || true
+        fi
+    done
+    [ -f "$CAM_BACKUP" ] && chmod 666 "$CAM_BACKUP" 2>/dev/null || true
+
+    # 9. PPD 및 알림 (power-tray 미사용 단독 CLI 실행 시에만 동기화 및 알림)
     if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
         powerprofilesctl set power-saver >/dev/null 2>&1 || true
-        run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-powersave-symbolic -t 3000 "전원 프로파일: [스마트 절전]" "부스트 OFF(1.7GHz 상한) 및 SMU 10W 제한\n(미사용 유선/무선 자동 절전 & 16스레드 유지)"
+        run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-powersave-symbolic -t 3000 "전원 프로파일: [스마트 절전]" "부스트 OFF(1.7GHz) 및 SMU 10W 제한\n(마이크/웹캠 차단 & 미사용 통신 절전)"
     fi
 }
 
@@ -685,12 +719,21 @@ set_ultra() {
         chmod 666 "$MIC_MUTE_BACKUP" 2>/dev/null || true
     fi
 
-    # 16. PPD 및 알림
+    # 16. 웹캠(Integrated Camera) USB 하드웨어 전원 차단
+    for cam_path in /sys/bus/usb/devices/*; do
+        if [ -f "$cam_path/product" ] && grep -qi "camera" "$cam_path/product" 2>/dev/null; then
+            echo "$cam_path" >> "$CAM_BACKUP"
+            echo 0 > "$cam_path/authorized" 2>/dev/null || true
+        fi
+    done
+    [ -f "$CAM_BACKUP" ] && chmod 666 "$CAM_BACKUP" 2>/dev/null || true
+
+    # 17. PPD 및 알림
     if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
         powerprofilesctl set power-saver >/dev/null 2>&1 || true
         run_as_user notify-send -a "ThinkPower" -h "string:x-canonical-private-synchronous:thinkpower" -i battery-profile-powersave-symbolic -t 4000 \
             "전원 프로파일: [초절전]" \
-            "CPU 1.4GHz+teo | SMU 4W | DRRS 48Hz | 백그라운드 절전 | 화면 20% | BT OFF\n(※ 16스레드 가동 & 이더넷/마이크 절전)"
+            "CPU 1.4GHz+teo | SMU 4W | DRRS 48Hz | 미사용 유/무선 차단 | 화면 20%\n(※ 마이크/웹캠 하드웨어 차단)"
     fi
 }
 
@@ -766,6 +809,16 @@ show_status() {
         eth_stat="초절전 파워다운 (미연결 PHY 절전 슬립)"
     fi
     echo "  - 유선 랜(Ethernet): $eth_stat"
+    local cam_stat="ON (정상 가동)"
+    if [ -f "$CAM_BACKUP" ]; then
+        cam_stat="OFF (하드웨어 포트 차단 / 초절전)"
+    fi
+    echo "  - 웹캠 (Camera)   : $cam_stat"
+    local mic_stat="ON (입력 대기)"
+    if [ -f "$MIC_MUTE_BACKUP" ]; then
+        mic_stat="MUTE (ADC 앰프 절전)"
+    fi
+    echo "  - 마이크 (Mic)    : $mic_stat"
     IDLE_GOV=$(cat /sys/devices/system/cpu/cpuidle/current_governor 2>/dev/null || echo "?")
     THP=$(cat /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null | grep -o '\[.*\]' | tr -d '[]' || echo "?")
     SWAP_VAL=$(cat /proc/sys/vm/swappiness 2>/dev/null || echo "?")
@@ -984,7 +1037,7 @@ set_restore() {
 
     # 6. 무선 랜 및 잔여 백업 파일 완전 정리
     rfkill unblock wifi >/dev/null 2>&1 || true
-    rm -f "$KBD_BACKUP" "$DISP_BACKUP" "$KDE_ANIM_BACKUP" "$BT_BACKUP" "$WAYDROID_BACKUP" "$AVAHI_BACKUP" "$DISPLAY_MODE_BACKUP" "$ETH_DOWN_BACKUP" "$MIC_MUTE_BACKUP" "$WIFI_BACKUP" 2>/dev/null || true
+    rm -f "$KBD_BACKUP" "$DISP_BACKUP" "$KDE_ANIM_BACKUP" "$BT_BACKUP" "$WAYDROID_BACKUP" "$AVAHI_BACKUP" "$DISPLAY_MODE_BACKUP" "$ETH_DOWN_BACKUP" "$MIC_MUTE_BACKUP" "$WIFI_BACKUP" "$CAM_BACKUP" 2>/dev/null || true
 
     # 7. 알림 (power-tray 미사용 단독 CLI 실행 시에만 알림)
     if [ "$INTERNAL_CALL" -eq 0 ] && [ -z "$THINKPOWER_INTERNAL" ]; then
