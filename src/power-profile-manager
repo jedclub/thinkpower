@@ -173,7 +173,7 @@ set_performance() {
     # 1. CPU
     [ -w /sys/devices/system/cpu/cpufreq/boost ] && echo 1 > /sys/devices/system/cpu/cpufreq/boost
     for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-        [ -w "$g" ] && echo schedutil > "$g"
+        [ -w "$g" ] && echo performance > "$g"
     done
     # 2. ThinkPad EC & ACPI
     [ -w /sys/firmware/acpi/platform_profile ] && echo performance > /sys/firmware/acpi/platform_profile
@@ -344,6 +344,32 @@ set_restore() {
     echo "✔ 안전 복구가 완료되었습니다. (균형 모드 전환)"
 }
 
+handle_ac_event() {
+    local cur_mode
+    cur_mode=$(cat "$STATE_FILE" 2>/dev/null || echo "balanced")
+    
+    local is_ac=0
+    for ac in /sys/class/power_supply/AC*/online /sys/class/power_supply/ucsi-source-psy-*/online; do
+        if [ -r "$ac" ] && [ "$(cat "$ac" 2>/dev/null)" = "1" ]; then
+            is_ac=1
+            break
+        fi
+    done
+    
+    local bat_stat
+    bat_stat=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null || echo "")
+    if [ "$bat_stat" = "Charging" ]; then
+        is_ac=1
+    fi
+    
+    if [ "$is_ac" -eq 1 ]; then
+        if [ "$cur_mode" = "ultra" ] || [ "$cur_mode" = "save" ]; then
+            echo "⚡ [전원 공급 감지] 충전 연결 트리거: 절전 모드를 해제하고 균형(balanced) 모드로 안전 복구합니다."
+            set_balanced
+        fi
+    fi
+}
+
 case "$1" in
     performance|perf)
         set_performance
@@ -363,11 +389,14 @@ case "$1" in
     restore|reset|failsafe)
         set_restore
         ;;
+    ac-event|ac-plug|on-ac)
+        handle_ac_event
+        ;;
     status)
         show_status
         ;;
     *)
-        echo "사용법: $(basename "$0") {performance|balanced|save|ultra|toggle|restore|status}"
+        echo "사용법: $(basename "$0") {performance|balanced|save|ultra|toggle|restore|ac-event|status}"
         exit 1
         ;;
 esac

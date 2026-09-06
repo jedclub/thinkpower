@@ -161,6 +161,7 @@ private:
     gint64 last_switch_time_us = 0;
     gint64 user_manual_lock_until_us = 0;
     bool last_ac_online = false;
+    bool is_first_run = true;
     gint64 last_ac_toggle_time_us = 0;
     std::string pending_dbus_expected_profile;
 
@@ -633,10 +634,23 @@ void PowerTrayApp::update_state_ui() {
     BatteryInfo bat = get_battery_info();
 
     gint64 now_mono = g_get_monotonic_time();
+    bool ac_connected = bat.ac_online || (bat.status == "Charging");
+    bool ac_just_connected = (!last_ac_online && ac_connected);
+
     if (bat.ac_online != last_ac_online) {
         last_ac_online = bat.ac_online;
         last_ac_toggle_time_us = now_mono;
     }
+
+    // [충전 모드 트리거 자동 복구]
+    // 전원 공급/충전 상태로 들어갔을 때, 현재 모드가 초절전(ultra) 또는 절전(save)이면
+    // 안전을 위해 강제로 균형(balanced) 모드로 자동 복구 전환하여 시스템 멈춤/오류를 원천 방지합니다.
+    if ((ac_just_connected || (is_first_run && ac_connected)) && (mode == "ultra" || mode == "save")) {
+        user_manual_lock_until_us = 0;
+        switch_mode("balanced", "ac_trigger");
+        mode = "balanced";
+    }
+    is_first_run = false;
 
     if (radio_items.count(mode) && radio_items[mode]) {
         GtkCheckMenuItem *chk = GTK_CHECK_MENU_ITEM(radio_items[mode]);
@@ -730,6 +744,9 @@ void PowerTrayApp::switch_mode(const std::string &mode_key, const std::string &t
     } else if (trigger_source == "user") {
         // User explicitly picked a mode: protect from external D-Bus/AC overrides for 60 seconds
         user_manual_lock_until_us = now + (60LL * 1000000LL);
+    } else if (trigger_source == "ac_trigger") {
+        // Force recovery on AC power connection: reset manual lock and allow instant switch
+        user_manual_lock_until_us = 0;
     }
 
     previous_mode = current_mode;
@@ -764,6 +781,12 @@ void PowerTrayApp::switch_mode(const std::string &mode_key, const std::string &t
                 "battery-profile-performance-symbolic"
             );
         }
+    } else if (trigger_source == "ac_trigger") {
+        notify_user(
+            L10n::is_korean() ? "전원 공급 감지: [균형 모드 자동 전환]" : "AC Power Connected: [Balanced Mode Restored]",
+            L10n::is_korean() ? "충전기가 연결되어 절전 모드를 해제하고 균형 모드로 자동 복구되었습니다." : "AC charger connected. Automatically restored to Balanced mode.",
+            "battery-profile-balanced-symbolic"
+        );
     }
 
     std::string os_target = "balanced";
