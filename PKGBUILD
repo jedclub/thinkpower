@@ -30,8 +30,9 @@ package() {
     install -Dm755 bin/power-tray "$pkgdir/usr/bin/power-tray"
     install -Dm755 src/power-profile-manager "$pkgdir/usr/bin/power-profile-manager"
 
-    # 2. Sudoers rule
+    # 2. Sudoers & Udev rules
     install -Dm440 src/config/99-power-profile-manager "$pkgdir/etc/sudoers.d/99-power-profile-manager"
+    install -Dm644 src/config/98-thinkpower-ac.rules "$pkgdir/usr/lib/udev/rules.d/98-thinkpower-ac.rules"
 
     # 3. Systemd user service
     install -Dm644 packaging/power-tray.service "$pkgdir/usr/lib/systemd/user/power-tray.service"
